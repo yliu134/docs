@@ -1,0 +1,108 @@
+---
+title: 'Kafka and Distributed Systems Reading List'
+sidebarTitle: 'Messaging'
+description: 'Curated Month 4 messaging reading list: Kafka book and design docs, the Raft and Paxos papers, and the essential Jay Kreps essay on the unified log.'
+---
+
+Month 4 of the framework is dedicated to messaging and distributed systems. Kafka and consensus are the core: partitioning, ordering, consumer groups, offsets, exactly-once semantics, and log compaction on the Kafka side; leader election and replication on the consensus side. By the end of this month you should be able to explain what happens to in-flight messages during a consumer group rebalance, why exactly-once took Kafka years to ship, and why you read Raft before Paxos. This list covers the two spine resources, the four essential papers and essays, and the engineering blogs worth your time.
+
+---
+
+## Spine
+
+<CardGroup cols={2}>
+  <Card title="Kafka: The Definitive Guide, 2nd Ed." icon="book">
+    **Gwen Shapira, Todd Palino, Rajini Sivaram, Krit Petty · O'Reilly**
+
+    The standard reference for Kafka producers, consumers, brokers, and operations. Read it as the companion to the official docs — it fills in the operational and design context that the docs assume you already have. Pay particular attention to the chapters on consumer groups, offset management, and exactly-once semantics.
+  </Card>
+  <Card title="Kafka Official Documentation — Design Section" icon="book">
+    **kafka.apache.org/documentation**
+
+    The Design section of the Kafka docs is one of the best pieces of technical writing in the distributed systems space. It explains every core design decision with the alternative that was rejected. Read this cover-to-cover, not just as reference. For every mechanism, ask: what did the Kafka team reject, and why?
+  </Card>
+</CardGroup>
+
+---
+
+## Canonical Papers and Essays
+
+<Note>
+  Read these in the order listed. Raft before Paxos is deliberate — Ongaro designed Raft specifically to be understandable first. Reading Paxos without Raft is harder than it needs to be.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Kafka: A Distributed Messaging System for Log Processing" icon="file-lines">
+    **Kreps, Narkhede, Rao · LinkedIn**
+
+    The original Kafka paper. Short, clear, and explains the core design decisions — sequential disk I/O, partition-level ordering, consumer offset management — that make Kafka different from traditional message queues. Read this before the book; it gives you the mental model the book assumes.
+  </Card>
+  <Card title="In Search of an Understandable Consensus Algorithm (Raft)" icon="file-lines">
+    **Ongaro & Ousterhout · USENIX ATC 2014**
+
+    Read this **before** Paxos. Raft was designed to be the consensus algorithm you can actually explain to someone else. Leader election, log replication, and membership changes are all covered. The paper is a pleasure to read — Ongaro's thesis ("Raft extended") is worth bookmarking for Month 6+ deep work.
+  </Card>
+  <Card title="Paxos Made Simple" icon="file-lines">
+    **Leslie Lamport**
+
+    Read this **after** Raft. Lamport wrote "Paxos Made Simple" as a simplified explanation of his original Paxos paper. With Raft as context, Paxos's design choices will be much clearer. Focus on understanding why Paxos is harder to implement than Raft despite being simpler to describe.
+  </Card>
+  <Card title="The Log: What Every Software Engineer Should Know..." icon="file-lines">
+    **Jay Kreps · LinkedIn Engineering · 2013**
+
+    The essay that made Kafka's design legible to the broader engineering community. Kreps explains the append-only log as the unifying abstraction behind databases, distributed systems, and stream processing. This is not a paper — read it as you would a long blog post, and come back to it after you've run Kafka locally.
+  </Card>
+</CardGroup>
+
+<Tip>
+  Read Raft before Paxos — this is not optional. Ongaro explicitly designed Raft to be understandable as the primary goal. Once you have Raft's leader election and log replication model in your head, Paxos's two-phase design will make more sense, and you'll understand what Raft simplified and what it traded for that simplicity.
+</Tip>
+
+---
+
+## Engineering Blogs
+
+<Tabs>
+  <Tab title="Kafka Internals">
+    | Blog | What to read |
+    |------|-------------|
+    | **Confluent Engineering** | Skip the marketing posts. Read the "Under the Hood" series — these are deep technical posts by Kafka committers on the internals of the broker, controller, and consumer group protocol. |
+    | **LinkedIn Engineering** | LinkedIn runs one of the largest Kafka deployments in the world and built Kafka. Posts on their pipeline architecture, Cruise Control (cluster rebalancing), and the evolution from ZooKeeper to KRaft are essential context. |
+  </Tab>
+  <Tab title="Kafka at Scale">
+    | Blog | What to read |
+    |------|-------------|
+    | **Uber Engineering** | Uber's posts on their Kafka infrastructure cover multi-datacenter replication, consumer lag monitoring, and operational challenges at very high throughput. One post from this series is enough for Month 4. |
+    | **Netflix Technology Blog** | Netflix's Kafka usage posts cover their consumer infrastructure, dead-letter queue patterns, and how they handle consumer group rebalances during deployments. Read one post as a case study on operational maturity. |
+  </Tab>
+</Tabs>
+
+---
+
+## Must-Watch Talk
+
+<Card title="Turning the Database Inside Out" icon="play" href="https://www.youtube.com/watch?v=fU9hR3kiOK0">
+  **Jay Kreps · StrangeLoop**
+
+  Kreps presents the thesis of "The Log" essay in talk form, with worked examples. Watch this before or after reading the essay — the two reinforce each other. This talk is the best forty-five minutes you can spend on understanding why Kafka is designed the way it is, and why the log is a more powerful abstraction than it first appears.
+</Card>
+
+---
+
+## Evolution Questions to Drive Your Reading
+
+<Accordion title="Why partition-then-topic instead of queue-per-consumer?">
+  Partitions allow Kafka to scale consumption by adding consumers to a consumer group, while preserving partition-level ordering. A queue-per-consumer model was rejected because it would require broker-side subscription state and make replay impossible. Know the trade-off: you give up per-message ordering within a topic in exchange for horizontal scale and replay.
+</Accordion>
+
+<Accordion title="Why did exactly-once take Kafka years to ship?">
+  Exactly-once delivery requires idempotent producers, transactional producers, and a broker-side transaction log. Each of those components has subtle failure modes. The hard part wasn't the happy path — it was ensuring that partial failures, retries, and consumer group rebalances didn't result in duplicates or gaps. Know the three components and what each one guarantees.
+</Accordion>
+
+<Accordion title="Why is ZooKeeper gone, and what was wrong with it?">
+  ZooKeeper was Kafka's external coordination layer — it stored broker metadata, partition leadership, and consumer group offsets. KRaft replaces ZooKeeper with a Raft-based metadata quorum inside Kafka itself. Know why ZooKeeper was a bottleneck, what operational complexity it added, and what KRaft changed in the leader election and metadata replication model.
+</Accordion>
+
+<Accordion title="Why is log compaction the way stateful stream systems bootstrap?">
+  Log compaction retains the last value for each key in a topic, allowing a consumer to bootstrap the current state of a key space by replaying the compacted log. Know why this is more useful than a snapshot for systems that need to join a stream in progress, and what compaction costs in terms of storage and read performance.
+</Accordion>

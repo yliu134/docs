@@ -1,0 +1,239 @@
+---
+title: 'Storage and Retrieval Internals: DDIA Ch 3'
+sidebarTitle: 'Storage & Retrieval'
+description: 'Hash indexes, SSTables, LSM trees, and B-trees each make a different trade. Chapter 3 shows why write-optimized and read-optimized engines exist and how to choose between them.'
+---
+
+A storage engine is a negotiated settlement between reads and writes. Every structure in Chapter 3 of DDIA buys speed on one side by spending it on the other — there is no structure that is simply better. Understanding which engine makes which bet tells you which database to pick for your workload, and why. The chapter's governing question is: *how does a database physically store what you give it, and how does it find it again?*
+
+## Two Families of Storage Engine
+
+Almost every storage engine is one of two things:
+
+<CardGroup cols={2}>
+  <Card title="Log-Structured" icon="list">
+    Only ever **append**. Never modify a file in place. Old data is reclaimed by rewriting whole files in the background (compaction).
+
+    Examples: hash indexes (Bitcask), SSTables, LSM-trees (LevelDB, RocksDB, Cassandra).
+  </Card>
+  <Card title="Page-Oriented" icon="page">
+    The file is a grid of fixed-size **pages overwritten in place**. Updates modify the same bytes the original write touched.
+
+    Examples: B-trees — the standard for every major relational database.
+  </Card>
+</CardGroup>
+
+The split is not arbitrary. It answers one question: **when a value changes, do you edit the old bytes or write new bytes elsewhere?** Every difference downstream — write amplification, crash recovery strategy, concurrency control, fragmentation, tail latency — descends from that single choice.
+
+<Note>
+  Sequential writes are the reason log-structured designs exist. Appending is dramatically faster than random-access writing on spinning disks, and still meaningfully faster on SSDs. Append-only also makes crash recovery and concurrency *simpler* — you can never leave a half-overwritten value behind, because you never overwrite.
+</Note>
+
+## Hash Indexes (Bitcask)
+
+The simplest key-value storage engine: an **append-only log** on disk paired with an **in-memory hash map** from key to byte offset.
+
+**Write:** append `key,value` to the file. Update the hash map: `key → new_byte_offset`.  
+**Read:** look up the offset in the hash map, seek to that position, read.
+
+Writes are `O(1)` and genuinely fast — appending to a file is about as good as writes get. Reads are also `O(1)` once you have the offset.
+
+### Compaction and Segments
+
+The log cannot grow forever. The solution:
+
+<Steps>
+  <Step title="Break into segments">
+    Close a segment file when it reaches a size threshold. Begin a new one. Each segment has its own in-memory hash map.
+  </Step>
+  <Step title="Compact segments">
+    Rewrite a segment keeping only the most recent value for each key. This reclaims space from superseded values.
+  </Step>
+  <Step title="Merge compacted segments">
+    Multiple compacted segments can be merged into one. Segments are immutable once written, so merging happens in a background thread while reads continue against old files; the switch-over is atomic.
+  </Step>
+</Steps>
+
+### Handling the Operational Problems
+
+| Problem | Standard answer |
+|---|---|
+| Deleting records | Append a **tombstone** marker; compaction discards the key and tombstone |
+| Crash recovery | Rebuilding hash maps from scratch is slow → Bitcask **snapshots each segment's hash map to disk** |
+| Partially written records | **Checksums** detect and discard corrupted tails |
+| Concurrency | **Single writer thread**; segments are immutable, so readers need no coordination |
+
+### The Two Limits of Hash Indexes
+
+Hash indexes break down in two ways that motivate everything that follows:
+
+1. **The hash table must fit in RAM.** An on-disk hash map requires random I/O everywhere, is expensive to grow, and has awkward collision handling. If you have more distinct keys than RAM, hash indexes don't work.
+2. **Range queries are not supported.** Scanning `key0000` through `key9999` means a point lookup per key. The hash map knows nothing about ordering.
+
+## SSTables and LSM-Trees
+
+**SSTable** (Sorted String Table): the same segment file as a hash-index log, but key-value pairs are **sorted by key**, and each key appears at most once per segment (compaction guarantees it). Sorting buys three things that hashing cannot:
+
+<Steps>
+  <Step title="Merging becomes mergesort">
+    Read input segments side-by-side, emit the lowest key, advance. Works with limited memory even when files exceed it. On duplicate keys, the more recent segment wins.
+  </Step>
+  <Step title="The in-memory index can be sparse">
+    You no longer need every key in memory. One entry every few kilobytes suffices — to find `handiwork`, find the offsets bracketing it (`handbag` and `handsome`) and scan the small range between them. Memory footprint drops by orders of magnitude.
+  </Step>
+  <Step title="Blocks can be compressed">
+    Group records into blocks, compress each block, point the sparse index at block boundaries. Saves disk space *and* I/O bandwidth — the sparse index amplifies the compression benefit.
+  </Step>
+</Steps>
+
+### The Write Path: Memtable + SSTable
+
+Sorting on disk is hard; sorting in memory is a solved problem. So the write path works in memory first:
+
+1. Writes land in an **in-memory balanced tree** (memtable — red-black tree, AVL, skiplist).
+2. When the memtable exceeds a threshold (a few MB), it is dumped to disk as a new SSTable. It's already sorted, so the dump is a sequential write.
+3. **Reads** check the memtable first, then the newest on-disk SSTable, then older ones.
+4. A background thread continuously merges and compacts segments.
+5. **Durability gap:** a crash loses the memtable. So every write *also* goes to a separate append-only **write-ahead log** on disk (unsorted), used only to restore the memtable after a crash. It is discarded once the memtable is safely flushed.
+
+<Note>
+  The full architecture in one sentence: an unordered log for durability, an ordered structure for querying. The log is fast to write and useless to read; the SSTable is the reverse. You keep both. This is the LSM-tree (Log-Structured Merge-Tree) — used by LevelDB, RocksDB, Cassandra, HBase, and Lucene's term dictionary.
+</Note>
+
+### LSM Optimizations
+
+<Accordion title="Bloom filters: avoiding the worst-case read">
+  Looking up a key that doesn't exist is the LSM worst case: check the memtable, then every SSTable from newest to oldest, all to conclude "no." A **Bloom filter** is a compact probabilistic data structure that answers "is this key definitely absent?" in O(1) memory with no false negatives. False positives (answering "maybe present" when the key is absent) cost one wasted disk lookup. In practice, Bloom filters eliminate the vast majority of unnecessary SSTable reads for non-existent keys.
+</Accordion>
+
+<Accordion title="Compaction strategies: size-tiered vs. leveled">
+  **Size-tiered compaction** (used by HBase, Cassandra): newer, smaller SSTables are merged into older, larger ones. Simple, but can cause space amplification during compaction when multiple copies of the same data temporarily coexist.
+
+  **Leveled compaction** (used by LevelDB, RocksDB, and optionally Cassandra): the key range is split into smaller SSTables and older data moves into distinct levels, each level 10× larger than the previous. More incremental, uses less disk space at steady state, but has higher write amplification because data is rewritten more times as it descends levels.
+
+  The practical choice is workload-dependent. Leveled is the default in RocksDB. Cassandra lets you configure per-table.
+</Accordion>
+
+## B-Trees
+
+B-trees are the dominant index structure for relational databases — standard in PostgreSQL, MySQL/InnoDB, Oracle, and SQL Server. They are ten years older than LSM-trees and going nowhere.
+
+Like SSTables, B-trees keep keys sorted, enabling both point lookups and range queries. The difference is everything about how they do it.
+
+### Mechanism
+
+<Steps>
+  <Step title="Fixed-size pages">
+    The file is broken into fixed-size **pages** (traditionally 4 KB, matching the hardware block size). The database reads and writes one page at a time. Each page has an on-disk address, so pages can reference each other — forming a tree on disk.
+  </Step>
+  <Step title="Root, interior, and leaf pages">
+    One page is the **root**. Interior pages contain keys and references to child pages, each covering a contiguous key range. **Leaf pages** hold the actual values (or references to them). To find a key, you traverse from root to leaf.
+  </Step>
+  <Step title="Branching factor">
+    The **branching factor** is the number of child references per page — typically several hundred. A four-level tree of 4 KB pages with branching factor 500 can index 256 TB. Depth is O(log n), and in practice most trees are 3–4 levels.
+  </Step>
+  <Step title="Updates and inserts">
+    **Update:** find the leaf, change the value, write the page back. The page's location on disk doesn't change.
+
+    **Insert:** find the page whose range covers the new key and add it. If the page is full, **split it into two half-full pages** and update the parent's reference. Splitting propagates upward only if the parent is also full. This is the source of B-tree fragmentation — partial pages after splits.
+  </Step>
+</Steps>
+
+### Crash Safety: The Write-Ahead Log
+
+A B-tree overwrites pages in place. A page split writes several pages — if a crash lands in the middle, the index is corrupt. So B-trees carry a **write-ahead log (WAL / redo log)**: every modification is appended to the WAL *before* being applied to the tree pages. After a crash, the WAL is replayed to restore consistency.
+
+<Tip>
+  Both B-trees and LSM-trees need an append-only log for crash safety. The LSM uses it to rebuild the memtable; the B-tree uses it to repair pages. The log is inescapable — the difference is only in how central it is to the design.
+</Tip>
+
+**Copy-on-write** (used by LMDB) is an alternative to WAL: instead of overwriting a page and logging the change, write the modified page to a new disk location and create a new parent that points to it. The old page remains intact until the new version is complete. This also gives snapshot isolation for free, because old readers can keep using the old page tree.
+
+## B-Trees vs. LSM-Trees
+
+<Note>
+  The canonical summary: **LSM-trees are faster for writes; B-trees are faster for reads.** But this is workload-dependent — benchmark with your actual access pattern before choosing.
+</Note>
+
+**Write amplification** is the key concept: one logical write to the database causing multiple physical writes over its lifetime. It matters for SSD wear and directly caps write throughput.
+
+| Property | LSM-Tree | B-Tree |
+|---|---|---|
+| Write throughput | Higher — sequential appends, lower write amplification in most workloads | Lower — every write hits the WAL then the page; a small change rewrites a full 4 KB page |
+| Read latency | Higher — may need to check memtable + multiple SSTables | Lower — deterministic page traversal; each key exists in exactly one place |
+| Space amplification | Lower — compaction reclaims dead space; files compress better due to homogeneous data in segments | Higher — page splits leave partial pages; dead space accumulates between compactions |
+| Tail latency | Unpredictable — compaction competes with live traffic for disk bandwidth; p99 can spike | More predictable — no background process competing for the same I/O path |
+| Compaction risk | High write throughput can outpace compaction; segments accumulate; reads slow; disk fills | No compaction process; fragmentation is bounded by tree operations |
+| Transactional semantics | Harder — a key can exist in multiple SSTables during compaction; range locks are complex | Easier — each key in exactly one location; range locks attach directly to tree nodes |
+
+The last row is why relational databases use B-trees. The LSM's advantage in write throughput is real, but transactions require that each key exist in exactly one place — which is a structural property of B-trees and must be engineered around in LSM systems.
+
+## Indexing Structures Beyond the Primary Key
+
+### Secondary Indexes
+
+Secondary indexes follow the same structure as primary indexes but are built on non-primary columns. Keys are not necessarily unique. The two options: make each index entry a list of matching row IDs, or append a row identifier to each key to make it artificially unique. Either way, updating any indexed column requires updating every index — which is why "well-chosen indexes speed up reads; every index slows down writes" is the governing trade-off.
+
+### Heap Files vs. Clustered Indexes
+
+<Tabs>
+  <Tab title="Heap File">
+    Rows live in an unordered **heap file**; indexes hold references (pointers) to heap locations. Multiple secondary indexes on the same table don't duplicate the row — they all point to one copy in the heap.
+
+    Updating a value in place works if the new value fits in the same slot; otherwise the row moves to a new location and either every index is updated or a forwarding pointer is left behind.
+  </Tab>
+  <Tab title="Clustered Index">
+    The row is stored *directly inside* the index structure itself. MySQL InnoDB's primary key is always a clustered index. Secondary indexes point to the primary key value, not a heap location — meaning a secondary index lookup requires two B-tree traversals: one for the secondary index, one for the primary key.
+
+    Clustered indexes eliminate the heap, so reads via the primary key are fastest. The cost: inserts that don't follow key order cause page splits.
+  </Tab>
+  <Tab title="Covering Index">
+    A **covering index** stores a subset of non-key columns inside the index alongside the key. If all the columns a query needs are present in the index, the query is satisfied without touching the main table at all — the index "covers" the query. Trades write cost and storage for read speed on specific high-frequency query patterns.
+  </Tab>
+</Tabs>
+
+### Multi-Column and Multi-Dimensional Indexes
+
+A **concatenated index** joins multiple fields into one key by appending (`lastname` + `firstname`). It answers prefix queries — "all Smiths", "Smith, John" — but not non-prefix queries: "all Johns" across all last names requires a full scan.
+
+For true multi-dimensional queries (latitude + longitude, or date + temperature), **R-trees** encode 2D regions and support bounding-box queries efficiently. This is how PostGIS and spatial databases answer "find all restaurants within 2 km."
+
+## OLTP vs. OLAP
+
+Storage engines split sharply along the OLTP / OLAP axis. The workloads are so different they justify separate physical designs.
+
+| Property | OLTP | OLAP |
+|---|---|---|
+| Read pattern | Few records per query, fetched by key | Aggregate over millions or billions of records |
+| Write pattern | Random-access, low-latency writes from user input | Bulk import (ETL) or event stream |
+| Primary user | End user via web application | Internal analyst for decision support |
+| Dataset size | GB to TB | TB to PB |
+| Schema shape | Normalized, 3NF | Star schema or snowflake (wide fact table, dimension tables) |
+
+Analytics workloads typically run in a **data warehouse** — a separate database that receives data via ETL (extract, transform, load) from OLTP systems. The warehouse can run expensive full-table scans without competing with production traffic.
+
+### Column-Oriented Storage
+
+The key insight for OLAP: a fact table may have 100+ columns, but a typical analytic query touches 4 or 5. Row-oriented storage loads all 100 columns' worth of bytes and discards 95% of them.
+
+**Column stores** (Redshift, BigQuery, Snowflake, Vertica) invert this: each column gets its own file, with rows in the same order across files. Row `k` is reassembled from the `k`-th entry of each column file — but most queries never reassemble the row at all, because they only need a few columns.
+
+<Accordion title="Column compression: bitmaps and run-length encoding">
+  A column's values are homogeneous — all integers, all product SKUs — and the number of distinct values is usually small relative to the number of rows. Column stores exploit this with **bitmap encoding**: one bitmap per distinct value, one bit per row indicating whether that row has this value.
+
+  If distinct values are numerous, the bitmaps are mostly zeros. Apply **run-length encoding** (count consecutive identical bits) and the bitmaps become very compact.
+
+  The payoff is substantial: a query `WHERE product_sk IN (30, 68, 69)` becomes "load three bitmaps, bitwise OR." Multiple `WHERE` conditions become bitwise AND operations. The query executes **directly against the compressed representation** with no decompression step.
+</Accordion>
+
+<Accordion title="Vectorized processing">
+  The bottleneck in column stores is not only disk-to-memory bandwidth — it's also memory-to-CPU-cache bandwidth, branch misprediction, and idle CPU pipelines. Compressed columns fit more data into L1 cache. Column store operators process data in **chunks** (vectors) in tight inner loops with no per-row function call overhead. Modern CPUs can issue SIMD (Single Instruction, Multiple Data) instructions that operate on multiple values simultaneously. This is **vectorized processing**, and it's a significant part of why column stores are fast on aggregation queries.
+</Accordion>
+
+### Sort Order and Materialized Aggregates
+
+Column stores can sort rows by a chosen key (consistently across all column files). The **first sort key** compresses dramatically under run-length encoding because consecutive rows often have the same value. Vertica and C-Store store **several differently-sorted copies** on different replicas — using the redundancy you already need for fault tolerance as a set of access-pattern-specific "indexes."
+
+Writing to a column store is hard: in-place updates are impossible when data is compressed and sorted. The answer is the LSM approach — buffer writes in an in-memory structure, merge with on-disk column files in bulk when enough has accumulated. Queries must examine both.
+
+**Materialized views** and **OLAP cubes** pre-aggregate common queries: a data cube pre-groups fact table rows by combinations of dimensions so rollup queries are lookups instead of scans. Fast, but rigid — you can only ask questions the cube was built for. Most warehouses keep raw data and treat cubes as an optimization for known-hot queries.

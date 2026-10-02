@@ -1,0 +1,178 @@
+---
+title: 'Engineering Blogs and Talks Worth Following'
+sidebarTitle: 'Blogs & Talks'
+description: 'The best engineering blogs and talks for systems engineers — organized by company and individual, with guidance on what to read and what to skip.'
+---
+
+The framework prescribes specific blog sources per topic, not a general reading list. Following the right people is as important as reading the right books — company engineering blogs carry the operational context and trade-off reasoning that textbooks can't convey, and individual engineers carry the taste and judgment that comes from years of hard-won production experience. This page is the full index of all recommended sources across Months 1–5, with guidance on what to read and what to skip.
+
+---
+
+## The Reading Rule
+
+<Note>
+  **A blog you can't summarize back in five sentences was not read.** Write those sentences into your `notes/` directory or your Sunday review — that is what "read" means in this framework. Bookmark ≠ read. Only what you wrote something about counts.
+</Note>
+
+---
+
+## Company Engineering Blogs
+
+<Tabs>
+  <Tab title="Databases">
+    <CardGroup cols={2}>
+      <Card title="Percona Blog" icon="building" href="https://www.percona.com/blog/">
+        **percona.com/blog**
+
+        The best MySQL engineering blog. Deeply technical, no marketing. Percona's engineers work on MySQL, InnoDB, and open-source tooling full-time — their posts on InnoDB internals, replication bugs, and performance analysis are reference quality. Subscribe and read one post per week during Months 1–2.
+      </Card>
+      <Card title="PlanetScale Engineering" icon="building" href="https://planetscale.com/blog">
+        **planetscale.com/blog**
+
+        MySQL and Vitess at modern scale. PlanetScale builds on MySQL and Vitess, so their engineering posts cover online schema changes, sharding architecture, and the operational challenges of running MySQL as a managed cloud database. Well-written with clear architectural reasoning. Read the Vitess and sharding posts during Months 1–2.
+      </Card>
+      <Card title="Meta Engineering" icon="building" href="https://engineering.fb.com">
+        **engineering.fb.com**
+
+        One of the largest MySQL deployments in the world. Meta's engineering posts cover schema management at scale, MyRocks (their RocksDB-based MySQL storage engine), and the operational learnings from running MySQL across hundreds of data centers. Use the search to find MySQL-specific posts during Months 1–2.
+      </Card>
+      <Card title="Vitess Blog" icon="building" href="https://vitess.io/blog/">
+        **vitess.io/blog**
+
+        Sharding architecture from the source. The Vitess maintainers post about vtgate, vttablet, topology, and the evolution of Vitess as a sharding layer. Read the architecture posts to understand why Vitess exists and what MySQL didn't want to solve in the kernel.
+      </Card>
+    </CardGroup>
+  </Tab>
+  <Tab title="Caching & Messaging">
+    <CardGroup cols={2}>
+      <Card title="Netflix TechBlog" icon="building" href="https://netflixtechblog.com">
+        **netflixtechblog.com**
+
+        Two essential series: the EVCache posts (Month 3) and the chaos engineering series (Month 5). For caching, search for EVCache — Netflix runs one of the largest Redis/Memcache deployments in the industry. For reliability, read the chaos engineering series from the original Chaos Monkey post through the FIT (Failure Injection Testing) posts. Skip everything else until those are done.
+      </Card>
+      <Card title="Discord Engineering" icon="building" href="https://discord.com/blog/engineering">
+        **discord.com/blog/engineering**
+
+        "How Discord stores trillions of messages" is the most-linked Discord engineering post, and rightfully so — it's a model case study in scale migration reasoning. Also read the Redis usage posts during Month 3. Discord's engineering blog is unusually honest about trade-offs and mistakes.
+      </Card>
+      <Card title="Confluent Engineering" icon="building" href="https://www.confluent.io/blog/tag/engineering/">
+        **confluent.io/blog**
+
+        Kafka from the people who built it. Skip the marketing posts and the product announcements. Read the "Under the Hood" series — these are deep technical posts by Kafka committers on the broker, controller, KRaft, and consumer group protocol internals. Filter by the "Engineering" tag or search for specific mechanism names.
+      </Card>
+      <Card title="Cloudflare Blog" icon="building" href="https://blog.cloudflare.com">
+        **blog.cloudflare.com**
+
+        Edge caching and network engineering at scale. Cloudflare's posts on CDN caching, cache invalidation at global scale, and the intersection of caching with network design are the best public writing on edge-layer caching. Read 1–2 posts during Month 3 for the contrast with application-layer Redis caching.
+      </Card>
+    </CardGroup>
+  </Tab>
+  <Tab title="Reliability">
+    <CardGroup cols={2}>
+      <Card title="Increment Magazine" icon="building" href="https://increment.com">
+        **increment.com (Stripe)**
+
+        Long-form engineering essays that don't exist anywhere else. The Reliability issue and the Debugging issue are the two must-reads for Month 5. Each article is written by a practitioner and edited to a higher standard than most engineering blogs. Read both issues in full during Month 5.
+      </Card>
+      <Card title="Uber Engineering" icon="building" href="https://www.uber.com/blog/engineering/">
+        **uber.com/blog/engineering**
+
+        Two essential reading tracks: the Postgres → MySQL migration series (Month 1–2, a masterclass in trade-off reasoning) and the Kafka infrastructure posts (Month 4). For databases, search "Postgres MySQL" to find the full series. For Kafka, search "Kafka" and read the pipeline architecture posts. Skip everything else.
+      </Card>
+    </CardGroup>
+  </Tab>
+</Tabs>
+
+---
+
+## Individual Engineers to Follow
+
+These individuals write with the kind of depth and taste that makes them worth reading on anything they publish — not just the posts that match your current topic.
+
+<CardGroup cols={2}>
+  <Card title="Jeremy Cole" icon="pen-nib" href="https://jcole.us">
+    **jcole.us · InnoDB internals**
+
+    Cole's "InnoDB storage engine" series is the reference for InnoDB's on-disk layout — page structure, B-tree page organization, clustered index format. There is no other public source that goes this deep on InnoDB internals with this level of accuracy. Read the full series during Months 1–2, not just individual posts.
+  </Card>
+  <Card title="Salvatore Sanfilippo (antirez)" icon="pen-nib" href="http://antirez.com">
+    **antirez.com · Redis design**
+
+    Sanfilippo is the creator of Redis. His blog covers the design decisions behind Redis in a way no documentation can — why single-threaded, why Streams over Pub/Sub, how the Cluster design evolved. Essential reading for Month 3. The blog is no longer actively updated but the archive is deep.
+  </Card>
+  <Card title="Charity Majors" icon="pen-nib" href="https://charity.wtf">
+    **charity.wtf · Observability**
+
+    Majors is the best writer on observability in production. Her posts on high-cardinality debugging, structured events vs metrics, and the operational realities of distributed systems are required reading for Month 5. Read at least three posts before you open *Observability Engineering* — she's the lead author and her blog is a preview of the book's core arguments.
+  </Card>
+  <Card title="Cindy Sridharan" icon="pen-nib" href="https://medium.com/@copyconstruct">
+    **@copyconstruct · Observability and distributed systems**
+
+    Sridharan's writing on the three pillars of observability, distributed tracing trade-offs, and testing in production is the most rigorous synthesis available in blog form. Her posts are long but dense — each one is worth the full read. Active on Medium; search her name to find the full archive.
+  </Card>
+  <Card title="Simon Willison" icon="pen-nib" href="https://simonwillison.net">
+    **simonwillison.net · Practical AI engineering**
+
+    Best-in-class practical AI engineering writing. Willison covers LLM capabilities, tool use, prompt engineering, and the engineering decisions behind real AI products with more clarity and less hype than anyone else writing publicly. Read everything he publishes as a continuous subscription throughout all eight months for Track B.
+  </Card>
+  <Card title="Eugene Yan" icon="pen-nib" href="https://eugeneyan.com">
+    **eugeneyan.com · ML system design**
+
+    Yan covers the engineering side of deploying and evaluating ML systems — retrieval, reranking, evaluation pipelines, and the operational challenges of running models in production. More systems-focused than most AI blogs, which makes his writing particularly useful for a systems engineer moving into AI work.
+  </Card>
+  <Card title="Chip Huyen" icon="pen-nib" href="https://huyenchip.com">
+    **huyenchip.com · LLMs in production**
+
+    Huyen covers the infrastructure and systems challenges of running large language models at scale — serving, latency, cost optimization, and the organizational challenges of ML in production. Her writing bridges the gap between ML research and systems engineering. Read the production-focused posts during Months 4–6 as Track B scales up.
+  </Card>
+  <Card title="Kyle Kingsbury (aphyr)" icon="pen-nib" href="https://aphyr.com/tags/jepsen">
+    **aphyr.com/tags/jepsen · Distributed systems safety**
+
+    Kingsbury's Jepsen analyses are the best applied consistency research available publicly. Each analysis tests a distributed database or queue under network partitions and compares the claimed guarantees to the actual behavior. Read the MySQL analysis and the analyses of any system you're studying. The writing is exceptional and the rigor is unmatched.
+  </Card>
+</CardGroup>
+
+---
+
+## Must-Watch Talks
+
+<CardGroup cols={2}>
+  <Card title="Turning the Database Inside Out" icon="play" href="https://www.youtube.com/watch?v=fU9hR3kiOK0">
+    **Jay Kreps · StrangeLoop · YouTube**
+
+    The talk that made Kafka's design legible to the broader engineering community. Kreps presents the thesis of his "The Log" essay with worked examples. Watch this during Month 4 — before or after reading the essay; the two reinforce each other. The best 45 minutes available on why the log is a more powerful abstraction than it first appears.
+  </Card>
+  <Card title="CMU 15-445: Intro to Database Systems" icon="play" href="https://www.youtube.com/playlist?list=PLSE8ODhjZXjbj8BMuIrRcacnQh20hmY9g">
+    **Andy Pavlo · Carnegie Mellon University · YouTube**
+
+    Watch the storage engine, query execution, and concurrency control lectures during Months 1–2 in parallel with the MySQL documentation. Pavlo references InnoDB frequently — the lectures and the MySQL docs cross-reinforce each other. You don't need to watch every lecture; prioritize storage, B-trees, buffer pool, and locking.
+  </Card>
+  <Card title="AI Engineer Summit" icon="play" href="https://www.youtube.com/@AIEngineerSummit">
+    **Various Speakers · YouTube**
+
+    The best conference for engineers building AI systems. Free recordings on YouTube. Watch 1–2 talks per month during Months 1–3 as part of the Track B light phase, and increase to 2–3 per month when the Track B project starts in Month 4. Prioritize talks on agent architecture, evaluation frameworks, and production observability for AI systems.
+  </Card>
+</CardGroup>
+
+---
+
+## Aggregators
+
+<CardGroup cols={2}>
+  <Card title="Planet MySQL" icon="rss" href="https://planet.mysql.com">
+    **planet.mysql.com**
+
+    A DBA and engineer blog aggregator that pulls from dozens of MySQL-focused blogs. Skim the headlines monthly during Months 1–2. It's a useful signal for what the MySQL community is thinking about, and it surfaces posts from smaller blogs that don't appear in general engineering feeds.
+  </Card>
+  <Card title="Latent Space Podcast" icon="headphones" href="https://www.latent.space">
+    **latent.space · Swyx & Alessio**
+
+    The best podcast for keeping current with AI engineering without spending hours per week on it. 1–2 episodes per month is the right budget throughout all eight months. Listen to episodes that match your current Track B focus — skip episodes that are pure research or pure product unless they're directly relevant to your project.
+  </Card>
+</CardGroup>
+
+---
+
+<Tip>
+  **The weekly cadence:** one blog post and one talk from the current topic, every week. This is not about accumulating information — it is about building vocabulary and taste. The engineer who has absorbed how the best practitioners reason about trade-offs will make better design decisions, not because they memorized the outcomes, but because they internalized the reasoning process.
+</Tip>

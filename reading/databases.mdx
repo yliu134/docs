@@ -1,0 +1,128 @@
+---
+title: 'Databases Reading List: Books, Blogs, and Papers'
+sidebarTitle: 'Databases'
+description: 'Curated Month 1–2 databases reading list: spine books, MySQL documentation, canonical papers, and the best engineering blogs for InnoDB internals.'
+---
+
+Month 1–2 of the framework is dedicated to databases. This list covers everything you need — from a single spine book read cover-to-cover, to the MySQL documentation sections you cannot skip, to the two canonical papers you should read adversarially, to the engineering blogs worth bookmarking and actually reading. *Designing Data-Intensive Applications* (Kleppmann) is the baseline for the entire plan and is not repeated here; treat it as always-on reading alongside everything below.
+
+---
+
+## Spine Books
+
+Pick **one** and read it cover-to-cover. Both pair directly with the MySQL/InnoDB work in this month.
+
+<CardGroup cols={2}>
+  <Card title="High Performance MySQL, 4th Ed." icon="book">
+    **Silvia Botros & Jeremy Tinley · O'Reilly · 2021**
+
+    The modern reference for MySQL and InnoDB internals and operations. If your target role involves MySQL at any scale, this is the spine. The 4th edition reflects MySQL 8 and current InnoDB behavior throughout.
+  </Card>
+  <Card title="Database Internals" icon="book">
+    **Alex Petrov · O'Reilly**
+
+    An engine-agnostic mid-depth companion to DDIA. Covers storage engine concepts, B-trees, LSM trees, and distributed database internals in a way that generalizes across systems. Read this if you want breadth over MySQL depth.
+  </Card>
+</CardGroup>
+
+---
+
+## MySQL Documentation
+
+<Warning>
+  These sections are non-negotiable. The MySQL reference manual is one of the best pieces of technical documentation in the industry — don't skip it for secondary sources.
+</Warning>
+
+Work through each section in order. For every mechanism you encounter, apply the depth rule: know what it does, what problem it was introduced to solve, and what it costs.
+
+<Accordion title="InnoDB Storage Engine (read all of it)">
+  The full InnoDB chapter is the authoritative reference for buffer pool management, redo log and undo log, MVCC, clustered indexes, and crash recovery. Read every subsection. If you encounter a term you can't explain in one breath, stop and resolve it before moving on.
+</Accordion>
+
+<Accordion title="Optimization — Index Selection and EXPLAIN">
+  Learn how the query optimizer chooses execution plans, how to read `EXPLAIN` and `EXPLAIN ANALYZE` output, and the common cases where the optimizer picks the wrong plan. You should be able to look at any `EXPLAIN` output and identify the access type, the key used, and whether the plan looks correct.
+</Accordion>
+
+<Accordion title="Replication — Binlog Formats and GTIDs">
+  Covers statement-based, row-based, and mixed replication, GTID-based replication topology, and the failure modes of each. Replication is how MySQL survives hardware failures and scales reads — understanding it is not optional.
+</Accordion>
+
+<Accordion title="Locking — Shared, Exclusive, Gap, Next-Key, Auto-Inc">
+  The locking chapter explains every lock type InnoDB uses under REPEATABLE READ and how gap locks prevent phantom reads. The deadlock patterns you'll encounter in production almost always trace back to gap or next-key locks. Know the mechanism before you hit them in a postmortem.
+</Accordion>
+
+---
+
+## Canonical Papers
+
+<Note>
+  Your budget is **two papers this month**. Pick from the list below and read them adversarially: read the abstract and introduction, then ask your AI to grill you on the claims before you read the rest.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="ARIES: A Transaction Recovery Method" icon="file-lines">
+    **Mohan et al. · 1992**
+
+    The WAL and redo-log foundation that InnoDB's recovery mechanism is built on. Reading ARIES makes the InnoDB redo log chapter land properly — you'll know *why* it works the way it does, not just *what* it does.
+  </Card>
+  <Card title="Amazon Dynamo" icon="file-lines">
+    **DeCandia et al. · SOSP 2007**
+
+    The paper that defined NoSQL trade-offs: consistent hashing, quorum reads/writes, eventual consistency, and the design choices that made DynamoDB possible. Essential context for understanding what MySQL does *not* try to solve.
+  </Card>
+  <Card title="Google Spanner" icon="file-lines">
+    **Corbett et al. · OSDI 2012**
+
+    Global distributed database with external consistency using TrueTime. Understand why globally-consistent timestamps are hard and what it costs to get them. Pairs well with the F1 paper below.
+  </Card>
+  <Card title="F1: A Distributed SQL Database That Scales" icon="file-lines">
+    **Shute et al. · VLDB 2013**
+
+    Google's MySQL-compatible SQL layer built on top of Spanner. Illustrates the gap between a storage engine and a full SQL system, and what trade-offs Google accepted to get global scale with familiar SQL semantics.
+  </Card>
+</CardGroup>
+
+---
+
+## Engineering Blogs
+
+<Tip>
+  One post per week from the current topic — for vocabulary and taste, not just information. A blog you can't summarize back in five sentences was not read.
+</Tip>
+
+<Tabs>
+  <Tab title="MySQL & InnoDB">
+    | Blog | What to read |
+    |------|-------------|
+    | **Percona Blog** | The best MySQL engineering blog — deeply technical, no marketing. Subscribe and read one post per week throughout Months 1–2. |
+    | **Jeremy Cole's blog** (jcole.us) | The "InnoDB storage engine" series is the reference for on-disk layout. Read the full series, not just individual posts. |
+    | **PlanetScale Engineering** | MySQL and Vitess at modern scale, well-written. Covers sharding, online schema changes, and how PlanetScale builds on the MySQL ecosystem. |
+    | **Vitess blog** (vitess.io/blog) | Sharding architecture from the source. Explains the design decisions behind vtgate and vttablet. |
+  </Tab>
+  <Tab title="Scale & Trade-offs">
+    | Blog | What to read |
+    |------|-------------|
+    | **Uber Engineering** | The Postgres → MySQL migration series is a masterclass in trade-offs. Read it as "why the MySQL era looked the way it did." |
+    | **Meta Engineering** | One of the largest MySQL deployments in the world. Posts on schema management, replication at scale, and operational learnings. |
+    | **Discord Engineering** | "How Discord stores trillions of messages" (Cassandra/Scylla) is a general scale-migration case study. Useful contrast to the MySQL path. |
+    | **Jepsen analyses** (aphyr.com) | Read the MySQL analysis for whatever variant you use. Kyle Kingsbury's safety testing is the best applied consistency research available. |
+  </Tab>
+</Tabs>
+
+**Aggregator:** Planet MySQL (planet.mysql.com) — a DBA and engineer blog aggregator. Skim monthly for topics you haven't covered yet.
+
+---
+
+## Free Course
+
+<Card title="CMU 15-445: Intro to Database Systems" icon="play" href="https://www.youtube.com/playlist?list=PLSE8ODhjZXjbj8BMuIrRcacnQh20hmY9g">
+  **Andy Pavlo · Carnegie Mellon University · YouTube**
+
+  Covers storage engine fundamentals, query execution, and concurrency control. Andy references InnoDB frequently, which makes the lectures a useful companion to the MySQL documentation. Watch the storage and concurrency lectures in parallel with the InnoDB chapter of the MySQL docs.
+</Card>
+
+---
+
+<Note>
+  **The reading rule that governs this list:** a blog you can't summarize back in five sentences was not read. Write those sentences into your `notes/` directory or your Sunday review — that is what "read" means in this framework.
+</Note>

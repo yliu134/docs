@@ -1,0 +1,83 @@
+---
+title: 'Canonical Papers Every Systems Engineer Should Read'
+sidebarTitle: 'Canonical Papers'
+description: 'The must-read academic papers across the full Track A and Track B syllabus — databases, caching, messaging, reliability, and AI systems.'
+---
+
+The framework prescribes specific papers for adversarial reading across all eight months. Two papers per month is the budget — choose carefully and read each one properly rather than skimming a longer list. Below is the full catalog organized by topic, with the venue, year, and the one-line reason each paper belongs on the list. Use this page to plan your two-per-month selections and to track what you've covered.
+
+---
+
+## How to Read Papers Adversarially
+
+Every paper on this list should be read the same way.
+
+<Note>
+  **The adversarial protocol:** Read the abstract and introduction. Stop. Ask your AI to grill you on the claims — *"What are the three biggest assumptions this paper makes? What would have to be true for this design to fail?"* Write down your answers. Then read the rest of the paper and check whether your model was right. The adversarial exchange before you read the body is what separates reading from studying.
+</Note>
+
+Two adversarial exchanges per paper is the minimum: one before reading the full paper, one after. The second exchange should use the paper's own results against you: *"Given what the paper shows, where would this system break in a workload the authors didn't test?"*
+
+---
+
+## Papers by Topic
+
+<Accordion title="Databases">
+  | Paper | Authors · Venue · Year | Why it's on the list |
+  |-------|------------------------|----------------------|
+  | **ARIES: A Transaction Recovery Method** | Mohan et al. · IBM Research · 1992 | The WAL and redo-log foundation. InnoDB's crash recovery is a direct implementation of ARIES. Read this and the MySQL redo log chapter lands at a different depth. |
+  | **Amazon Dynamo: Amazon's Highly Available Key-value Store** | DeCandia et al. · SOSP 2007 | The paper that defined NoSQL trade-offs: consistent hashing, quorum R/W, eventual consistency, vector clocks, hinted handoff. The vocabulary of distributed key-value stores comes from here. |
+  | **Spanner: Google's Globally-Distributed Database** | Corbett et al. · OSDI 2012 | Global distributed database with external consistency using TrueTime. The paper that showed what it costs to get globally-consistent timestamps. Essential for understanding what MySQL doesn't try to do. |
+  | **F1: A Distributed SQL Database That Scales** | Shute et al. · VLDB 2013 | Google's MySQL-compatible SQL layer on Spanner. Shows the gap between a storage engine and a full SQL system, and the trade-offs Google accepted to get global scale with familiar SQL semantics. |
+  | **Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service** | Elhemali et al. · USENIX ATC 2022 | The 2022 paper explaining why Amazon abandoned the leaderless Dynamo architecture for per-partition Paxos leaders. The answer to the Month 2 evolution question: "Amazon wrote the Dynamo paper, then built DynamoDB on a different architecture — why?" |
+</Accordion>
+
+<Accordion title="Caching">
+  | Paper | Authors · Venue · Year | Why it's on the list |
+  |-------|------------------------|----------------------|
+  | **Scaling Memcache at Facebook** | Nishtala et al. · NSDI 2013 | The canonical paper on operating a cache at scale. Covers lease-based stampede prevention, MySQL-binlog-driven invalidation, and regional consistency. The lease design is the part you must understand in detail — it directly informs how you'd design cache invalidation in any large system. |
+  | **TAO: Facebook's Distributed Data Store for the Social Graph** | Bronson et al. · USENIX ATC 2013 | Facebook's purpose-built graph cache and store on top of MySQL and Memcache. Shows what happens when cache-aside at scale isn't enough and you need a cache that understands your data model. Read after the Memcache paper for context on how the two systems interacted. |
+</Accordion>
+
+<Accordion title="Messaging and Consensus">
+  | Paper / Essay | Authors · Venue · Year | Why it's on the list |
+  |---------------|------------------------|----------------------|
+  | **Kafka: A Distributed Messaging System for Log Processing** | Kreps, Narkhede, Rao · LinkedIn · 2011 | The original Kafka paper. Explains the core design decisions — sequential disk I/O, partition-level ordering, consumer offset management — that make Kafka different from traditional message queues. Short and essential. |
+  | **In Search of an Understandable Consensus Algorithm (Raft)** | Ongaro & Ousterhout · USENIX ATC 2014 | Read before Paxos. Raft was designed to be the consensus algorithm you can explain to someone else. Leader election, log replication, and membership changes. Ongaro's extended thesis is worth bookmarking for Month 6+ deep work. |
+  | **Paxos Made Simple** | Lamport · ACM SIGACT News · 2001 | Read after Raft. Lamport's simplified explanation of Paxos. With Raft as context, Paxos's two-phase design makes more sense, and you'll understand what Raft simplified and what it traded for that simplicity. |
+  | **The Log: What Every Software Engineer Should Know About Real-Time Data's Unifying Abstraction** | Kreps · LinkedIn Engineering · 2013 | An essay, not a paper. The conceptual foundation for understanding Kafka's design. Explains the append-only log as the unifying abstraction behind databases, distributed systems, and stream processing. Read it as a long blog post; it's the best single piece of writing about why Kafka exists. |
+</Accordion>
+
+<Accordion title="Reliability and Observability">
+  | Paper | Authors · Venue · Year | Why it's on the list |
+  |-------|------------------------|----------------------|
+  | **Dapper: A Large-Scale Distributed Systems Tracing Infrastructure** | Sigelman et al. · Google Technical Report · 2010 | The origin of distributed tracing as it is practiced today. Introduced spans, trace context propagation, and sampling strategies. Short (14 pages), readable, and explains why every OpenTelemetry API exists. Read this before any OTEL implementation work. |
+</Accordion>
+
+<Accordion title="AI Systems">
+  | Paper | Authors · Venue · Year | Why it's on the list |
+  |-------|------------------------|----------------------|
+  | **Attention Is All You Need** | Vaswani et al. · NeurIPS 2017 | The transformer paper. Read for the mental model: why attention replaced recurrence, what multi-head attention does, how the encoder-decoder architecture works. You don't need to implement it — you need to understand it well enough that every explanation of how LLMs work lands properly. |
+  | **ReAct: Synergizing Reasoning and Acting in Language Models** | Yao et al. · ICLR 2023 | Formalizes the Reason + Act loop that most agent frameworks implement. Read this before building any agent — it explains the pattern you're implementing and its failure modes. |
+  | **Toolformer: Language Models Can Teach Themselves to Use Tools** | Schick et al. · Meta AI · 2023 | Shows how models can learn to call external APIs by self-supervising on when and how to use tools. Gives you a different perspective on tool use as a learned capability rather than a prompted behavior. |
+</Accordion>
+
+---
+
+## Reading Schedule
+
+Two papers per month is the budget. Here is the recommended sequencing across the Track A syllabus.
+
+| Month | Primary Track | Recommended Papers |
+|-------|--------------|-------------------|
+| 1 | Databases | ARIES (1992) · Amazon Dynamo (SOSP 2007) |
+| 2 | Databases (cont.) + Cassandra | Google Spanner (OSDI 2012) · DynamoDB 2022 (USENIX ATC) |
+| 3 | Caching | Scaling Memcache (NSDI 2013) · TAO (ATC 2013) |
+| 4 | Messaging | Kafka original · Raft (USENIX ATC 2014) |
+| 4 (continued) | Messaging | Paxos Made Simple · The Log (Kreps essay) |
+| 5 | Reliability | Dapper (Google 2010) · F1 (VLDB 2013) if not yet read |
+| Track B (ongoing) | AI Systems | Attention Is All You Need · ReAct · Toolformer (one per month, Months 1–3) |
+
+<Warning>
+  Two papers per month is not a floor — it is the budget. Attempting more while also doing the spine reading, the blog posts, and the weekly artifact will spread you too thin. Curate hard. One paper read adversarially is worth five papers skimmed.
+</Warning>

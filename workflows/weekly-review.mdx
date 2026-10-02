@@ -1,0 +1,134 @@
+---
+title: 'Running Your Weekly Sunday Review'
+sidebarTitle: 'Weekly Review'
+description: 'Run the 30-minute Sunday ritual — six reflection questions plus a monthly rollup — that keeps the Engineering Growth framework honest and on track.'
+---
+
+The Sunday review is the framework's primary feedback loop. Without it, the plan drifts: weeks blur together, avoidance goes unnamed, and the gap between what you intended to learn and what you actually absorbed grows silently. Thirty minutes on Sunday, written down and committed, is the single most reliable way to keep the eight months honest.
+
+## The Six Questions
+
+Each question targets a different failure mode. Answer them in order — the sequence matters.
+
+<Accordion title="1. What did I ship this week?">
+List concrete things: commits, artifacts, writeups, design answers, decisions. If you can't name a specific file or output, you didn't ship it — you read about it.
+
+This question is the ledger for the one-artifact-per-week rule. If the week's artifact was a five-line case study reduction, name the case study and confirm the five lines are written. The Sunday review's Q1 is the only artifact tracker; there is no separate table.
+</Accordion>
+
+<Accordion title="2. What did I finally understand?">
+Write one line. The format is a running journal of moments where something clicked — *"I finally understand why InnoDB uses undo log for MVCC instead of dead tuples."* One sentence forces you to compress the insight to its core. If you can't compress it, you don't quite have it yet.
+</Accordion>
+
+<Accordion title="3. Where did I get stuck?">
+Name the specific blocker: a bug you couldn't reproduce, a concept whose mechanism you can explain only vaguely, or a week where motivation bottomed out. The act of naming a blocker dissolves most of its weight and points directly at next week's #1 priority.
+</Accordion>
+
+<Accordion title="4. What am I avoiding, and why?">
+This is the question most likely to go unanswered honestly. Avoidance shows up as a topic that never makes it onto the Reminders list, a chapter you keep meaning to finish, or a case study sitting half-reduced. Write the real reason — boredom, uncertainty about the depth bar, vague dread — not the polite version.
+</Accordion>
+
+<Accordion title="5. If I interviewed Monday, what's my weakest story?">
+Assume a senior backend loop starting tomorrow. Which topic would you least want to be asked about? This surfaces the gap between felt confidence and actual preparedness faster than any other question. Let the answer drive Track C emphasis for the following week.
+</Accordion>
+
+<Accordion title="6. Next week's #1 priority?">
+Pick one thing — the single most important item for the week. Everything else is secondary. This becomes the first item on next week's Reminders list. Choosing one is the constraint; if you can't pick, the week will scatter.
+</Accordion>
+
+## The Monthly Rollup
+
+Every fourth Sunday, add the following questions below the six standard ones. The rollup is a wider-angle view: it surfaces trends that a single week can't show.
+
+<CardGroup cols={2}>
+  <Card title="Skills" icon="chart-line">
+    What skills are clearly getting stronger? Name them specifically — not "databases" but "I can explain the MVCC undo-log trade-off without notes."
+  </Card>
+  <Card title="Avoidance" icon="eye-slash">
+    What topics have you been avoiding across the whole month? One week of avoidance is noise; four weeks is a pattern that needs a decision.
+  </Card>
+  <Card title="Building vs. Reading" icon="hammer">
+    Are you spending most of your time building or just reading? Reading is easier to schedule and harder to convert into interview answers. If the month tilted toward reading, plan at least one concrete artifact for the next month.
+  </Card>
+  <Card title="Confidence Gaps" icon="magnifying-glass">
+    If you interviewed next month, what would you feel least confident about? This is the same as Q5 but with a month's worth of evidence behind it. Let it reweight Track C.
+  </Card>
+</CardGroup>
+
+Also ask: is there anything to change in the roadmap? The roadmap is not a contract. If a topic took twice as long, a track needs reweighting, or a non-goal solidified into a goal, update it now rather than carrying the mismatch forward.
+
+## How to Use Low Weeks
+
+This template is a thinking tool, not accounting. Confusion and lazy periods are expected in any eight-month plan — they are not failures to explain away.
+
+<Note>
+  If the week was low or lazy, write about it directly. The reliable remedy for a drift week is writing it down clearly — naming what happened, what you avoided, and what the next smallest step is. No willpower trick replaces this. The Sunday review is the standing surface for it.
+</Note>
+
+A low week written down honestly is more useful than a high week summarised vaguely. Gaps and confusion are data. The review exists precisely for these weeks.
+
+## The Sunday Process
+
+<Steps>
+  <Step title="Check the README">
+    Open `README.md` and read the **Current week** section. Note what was planned, what the #1 priority was, and what carried from the previous week. This takes two minutes and prevents you from reviewing in a vacuum.
+  </Step>
+  <Step title="Create the review file">
+    Copy `reviews/template.md` to `reviews/YYYY-MM-DD.md` — dated for today's Sunday. The file name is the date you're writing, not the start of the week.
+  </Step>
+  <Step title="Answer the six questions honestly">
+    Work through the questions in order. Don't skip Q4. If it's the fourth Sunday of the month, add the monthly rollup section below. Budget roughly twenty minutes for this step.
+  </Step>
+  <Step title="Set next week's #1 priority">
+    Take your answer to Q6 and build next week's Reminders list around it. The #1 priority goes at the top. See the [Reminders workflow](/workflows/reminders) for the full setup process (~10 minutes).
+  </Step>
+  <Step title="Commit the review file">
+    Run `git add reviews/YYYY-MM-DD.md README.md && git commit -m "review: YYYY-MM-DD"`. The commit is the act of closing the week. An uncommitted review is the same as no review — the work doesn't count until it's recorded.
+  </Step>
+</Steps>
+
+## Review File Format
+
+Every review file follows this structure. The template lives at `reviews/template.md`; copy it rather than writing from scratch.
+
+```markdown
+# Sunday review — YYYY-MM-DD
+
+## Week of ______
+
+**1. What did I ship this week?**
+_(commits, artifacts, writeups, decisions — concrete things)_
+
+
+**2. What did I finally understand?**
+_(one line — running "I finally understand..." journal)_
+
+
+**3. Where did I get stuck?**
+_(bug, concept, motivation)_
+
+
+**4. What am I avoiding, and why?**
+
+
+**5. If I interviewed Monday, what's my weakest story?**
+
+
+**6. Next week's #1 priority?**
+_(single most important thing — this becomes the top of next week's Reminders list)_
+
+
+---
+
+## Monthly rollup (every 4th Sunday — add below)
+
+- What skills are clearly getting stronger?
+- What topics have I been avoiding?
+- Am I spending most of my time **building** or just **reading**?
+- If I interviewed next month, what would I still feel least confident about?
+- Anything to change in the ROADMAP?
+```
+
+<Tip>
+  The **"My miss"** line from every five-line case study also belongs here — paste it into Q1 alongside the case study name. The review is the ledger for five-line reductions, and "My miss" is the one line you can't write from skimming. If it's missing from Q1, the case study isn't done.
+</Tip>

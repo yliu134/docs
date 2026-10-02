@@ -1,0 +1,106 @@
+---
+title: "The Four-Technique Learning Method for Systems Mastery"
+sidebarTitle: "Learning Method"
+description: "The four techniques that underpin every Track A topic: deep read, local instance, evolution history, and AI adversarial verification."
+---
+
+Every Track A topic in the plan is studied through the same four techniques. They came directly from mentor guidance and apply regardless of which month you are in or which system you are reading about. Skip any one of them and the depth you build will have a recognizable shape of gap — either you will know mechanisms but not their history, or you will have read everything and have no way to test what you actually retained, or you will have gone too deep in some areas and not deep enough in others. Apply all four, in combination, from the first week.
+
+---
+
+## The Four Techniques
+
+<AccordionGroup>
+  <Accordion title="1. Deep Read to a Bar">
+    Books and official documentation are the spine of Track A. Not blog posts, not YouTube summaries, not AI explanations. The primary source is the thing you read cover-to-cover — or as much of it as the depth bar requires.
+
+    **The depth rule** settles "how far do I go?" once, for every topic:
+
+    > Know the **mechanism** and the **trade-off** — not the implementation. For any feature, know what it does, what problem it was introduced to solve, and what it cost. Then move on.
+
+    Do not read the source code unless Month 6+ source-code deep-dive is your chosen track. Do not re-read sections until they feel comfortable — re-read until you can explain them without the book open. Do not move on because you finished the chapter. Move on when you can reconstruct the Core ideas section of your note from memory.
+
+    **Worked example — InnoDB gap locks:**
+    - What they do: prevent phantom reads by locking the *gap* between index records, not just the records themselves.
+    - Why they exist: under REPEATABLE READ, without gap locks, a concurrent INSERT into a scanned range could produce a phantom row on re-read, violating the isolation guarantee.
+    - What they cost: a class of deadlock that surprises people — two transactions can each hold a gap lock and block each other trying to insert into the same gap.
+
+    That is the bar met. `lock0lock.cc` is not on the syllabus.
+
+    **Unresolved terms.** If you encounter a term you cannot define, stop and resolve it before continuing. Do not read past an unresolved term hoping context will fill it in. Context rarely does, and the unresolved term quietly invalidates everything that follows it.
+  </Accordion>
+
+  <Accordion title="2. Local Instance & Play">
+    Install and run the system locally, then poke it — trigger the mechanisms you just read about and observe them directly.
+
+    **This technique was downgraded to optional in September 2026.**
+
+    The reasoning: for a job-switch goal on an eight-month timeline, reading and case studies carry more weight than hands-on reproduction. A local instance is most valuable when hands-on is genuinely the *cheapest* path to a mechanism — for example, running `EXPLAIN ANALYZE` on a real query plan, or watching a Redis eviction happen under a bounded memory limit. It is not valuable as a per-topic checkbox that you tick regardless of whether it adds understanding faster than reading would.
+
+    Where you do run a local instance, keep two rules:
+    - **Mark unverified claims explicitly.** If a mechanism would require a cluster, a specific workload, or a benchmark to reproduce, do not assert it as if you tested it. Write "unverified — needs cluster" in your notes.
+    - **Time-box it.** Local instance work expands to fill available time. Set a specific question you are answering with the instance, answer it, and stop.
+
+    **When it is still worth doing:** for MySQL/InnoDB in Month 1–2, running `EXPLAIN` and `EXPLAIN ANALYZE` on a real schema with real data is faster than reading about query plans in the abstract. For Redis in Month 3, triggering LRU eviction and watching the approximated sampling behavior directly informs the mechanism in a way prose does not. Use judgment — hands-on where it is cheaper, reading where it is not.
+  </Accordion>
+
+  <Accordion title="3. Evolution History">
+    For every design decision in a system, ask: *why this instead of the older thing?*
+
+    This is not a question about history for its own sake. It is the question that surfaces trade-offs — and trade-offs are the actual content. When you have to make a design decision at work, most of the answer already exists in how some widely-deployed system evolved to its current shape. Having absorbed that evolution means you are not reasoning from first principles under time pressure; you are pattern-matching against documented decisions made at scale.
+
+    **How to apply it.** Every topic in the Roadmap includes a set of evolution questions. Treat them as required, not optional. Write out your answers — a few sentences each is enough. The writing forces precision in a way that thinking through the answer does not.
+
+    **Example questions from Month 1–2 (Databases):**
+    - Why B+ trees over binary trees or hash indexes for range scans?
+    - Why MVCC over two-phase locking for reads — and what does MVCC cost?
+    - Why did MyISAM lose to InnoDB? What was actually broken about MyISAM's model?
+    - Amazon wrote the Dynamo paper, then built DynamoDB on a different architecture. Why abandon their own leaderless design?
+
+    The answers to these questions are the depth that makes interview answers sound like experience rather than recitation.
+  </Accordion>
+
+  <Accordion title="4. AI Adversarial Verification">
+    Use AI weekly to expose the gaps in your understanding. The technique has three modes:
+
+    **Stress-test a mechanism.** Pose a scenario where the system is ill-suited and ask how you would make it work anyway: *"In a scenario ill-suited for MySQL — write-heavy, high-contention — design MySQL to support it. Then tell me what I'd break in production."* The gaps in your answer show you what you do not yet understand about the mechanism's constraints.
+
+    **Tear apart an explanation.** After writing a note or a case study reduction, ask AI to find the errors: *"Here is my explanation of InnoDB MVCC. Tear it apart. Where is this wrong or incomplete?"* Be specific about what you want challenged. Vague prompts produce vague pushback.
+
+    **Simulate the interview.** Ask AI to interview you as a senior backend interviewer would: *"Interview me on InnoDB gap locks for a senior backend role. Push until I say something wrong."* This is not a substitute for a human mock interview, but it is available at 11pm on a Tuesday and will find the exact words you are imprecise about.
+
+    Run at least one adversarial exchange per week. Record the exchange in your notes — the specific questions and your answers. An exchange you do not write down is mostly lost within a week.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## The Depth Bar
+
+The depth bar is the definition of "done" for any topic or sub-topic. It is the same bar across all of Track A:
+
+> On any random page of the topic's documentation or primary book, you can **state the term**, **describe its role in the overall system**, and **explain the rough mechanism** — in one or two sentences, without looking anything up.
+
+Two clarifications on what this means in practice:
+
+**"Rough mechanism" does not mean implementation.** You do not need to know the data structure in memory, the function names in the source, or the exact algorithm. You need to know what the system is doing and why, at the level of a clear paragraph. For redo log in InnoDB: writes land on a sequential physical log before being applied to buffer-pool pages, which enables crash recovery and makes physical replication possible. That is the mechanism. The specific ring-buffer implementation in the source is not.
+
+**Unresolved terms block you from meeting the bar.** If you encounter a term on a random page and cannot define it, you have not yet met the depth bar for that topic. Stop, resolve the term, and add it to your notes before continuing. The bar is not met until you have no unresolved terms left in the topic's core material.
+
+---
+
+## Example: Applying All Four Techniques to MySQL InnoDB
+
+Month 1–2 is the Databases block. MySQL/InnoDB is the primary system. Here is what all four techniques look like applied together:
+
+**Deep read to a bar.** Read the MySQL Reference Manual's InnoDB Storage Engine chapter in full. For each mechanism — buffer pool, redo log, undo log, MVCC, clustered index, gap locks, replication — write a Core ideas section from memory after reading. The bar: on any page of the InnoDB chapter, you can explain the term, its role, and the mechanism. No unresolved terms.
+
+**Local instance (optional, time-boxed).** Run MySQL 8 locally. Load ~1M rows into a real schema. Run `EXPLAIN` and `EXPLAIN ANALYZE` on queries and observe the query planner's choices. Force a gap-lock deadlock under REPEATABLE READ and watch what InnoDB reports. Time-box each session to a specific question.
+
+**Evolution history.** Answer the Month 1 evolution questions in writing: why B+ trees over hash indexes, why MVCC over two-phase locking, why gap locks exist, why MyISAM lost. Each answer should be three to five sentences and should name the specific trade-off — what was gained and what was given up.
+
+**AI adversarial.** Run the Month 1 adversarial prompts: write-heavy scenario ill-suited for MySQL, senior-level interview on gap locks, walk-through of a REPEATABLE READ deadlock. Write up each exchange. The "what I'd break in production" part of the first prompt will surface mechanisms you have not fully resolved yet.
+
+<Tip>
+**Protect "my miss."** In the five-line case study reduction, the fourth line — "My miss: what I'd have gotten wrong" — is the line that does the actual work. It is the only line you cannot write from skimming. The deep read, evolution history, and adversarial verification techniques all exist, in part, to make that line honest. If you can write it without any of the four techniques, you are writing something generic. If it takes real thought, you did the work.
+</Tip>

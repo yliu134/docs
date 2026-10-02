@@ -1,0 +1,124 @@
+---
+title: 'Navigate the 8-Month Engineering Growth Roadmap Plan'
+sidebarTitle: 'Overview'
+description: 'An 8-month plan spanning Databases, Caching, Messaging, Reliability, and AI — three parallel tracks, weekly artifacts, and interview-readiness milestones.'
+---
+
+The Engineering Growth framework takes you from senior backend engineer to systems engineer fluent in AI systems over eight months (August 2026 → March 2027). Rather than skimming a dozen technologies, the plan sends you deep into a carefully narrowed stack — MySQL, Cassandra, Redis, Kafka — while running a parallel AI project track and a steady interview-prep cadence. Three tracks, one long project, and a weekly artifact habit form the backbone of every month.
+
+## Monthly Syllabus
+
+<Steps>
+  <Step title="Months 1–2 · Databases">
+    **Primary focus:** DDIA chapters 1–7, MySQL 8 / InnoDB internals.
+
+    Cover the buffer pool, redo log, undo log, MVCC, clustered indexes, transaction isolation levels (including gap locks and next-key locks), and replication (statement / row / mixed, GTIDs, Vitess sharding).
+
+    **Depth bar:** on any DDIA or MySQL reference-manual page, state the mechanism in one breath with no unresolved terms.
+
+    *Artifact ideas:* toy B+ tree with insert/delete/range-scan writeup; reproduced gap-lock deadlock walkthrough; query-plan gotcha with `EXPLAIN ANALYZE`.
+  </Step>
+
+  <Step title="Month 2 Back Half · Cassandra (reading-only, ~2 weeks)">
+    **Primary focus:** Dynamo half (consistent hashing, vnodes, gossip, tunable consistency, `R+W>RF`, hinted handoff, read repair, Merkle repair) and Bigtable half (partition vs. clustering key, query-first modeling, LSM storage, compaction, tombstones).
+
+    This block lands deliberately alongside DDIA chapters 5–6 on leaderless replication and partitioning. MySQL covers the leader-based half of those chapters; Cassandra is the worked example for the other half.
+
+    **No local install** — this is a conceptual slot, not a stack pick. Mechanisms you cannot verify without a cluster are marked as unverified in your notes.
+
+    *Artifact ideas:* "same workload, two engines" design doc comparing InnoDB and Cassandra trade-offs; short post answering why Amazon abandoned leaderless Dynamo for per-partition Paxos in DynamoDB.
+  </Step>
+
+  <Step title="Month 3 · Caching">
+    **Primary focus:** Redis internals and eviction algorithms (approximated LRU/LFU); cache patterns (cache-aside, write-through, write-back, refresh-ahead); invalidation, stampede, hot keys, and distributed cache consistency.
+
+    **Depth bar:** for each cache pattern, know the exact scenario where it fails. For every Redis data structure, know its cost profile.
+
+    *Artifact ideas:* token-bucket rate limiter in Lua with a writeup on why Lua; cache stampede reproduction and mitigation blog post.
+  </Step>
+
+  <Step title="Month 4 · Messaging + Distributed Systems">
+    **Primary focus:** Kafka — partitioning, ordering, consumer groups, offsets, exactly-once semantics, log compaction. Consensus via Raft: leader election, log replication, retries, idempotency.
+
+    **Depth bar:** for any Kafka design-doc page, know the mechanism *and* why the rejected alternative was rejected.
+
+    *Artifact ideas:* toy Raft implementation (leader election only, ~500 lines); event-driven service with chaos-style failure injection; writeup on what "exactly once" really means in Kafka.
+  </Step>
+
+  <Step title="Month 5 · Reliability + Observability">
+    **Primary focus:** distributed tracing, metrics, structured logging; OpenTelemetry (collector, spans, context propagation); load testing; performance profiling. Instrument a prior artifact end-to-end with OTEL, Jaeger/Tempo, Prometheus, and Grafana.
+
+    **Depth bar:** for any SRE or OTEL concept, state the problem it exists to solve.
+
+    *Artifact ideas:* instrument a prior artifact with OTEL, publish dashboard screenshot and blog; synthetic-incident postmortem for your Track B project.
+  </Step>
+
+  <Step title="Month 6+ · Deep Choice (Elastic Buffer)">
+    Pick **one** system to read source code for: MySQL/InnoDB, Kafka, or a Raft/consensus implementation (etcd or TiKV). Drive each weekly session with a specific question you are trying to answer — no open-ended browsing.
+
+    This is the schedule's elastic buffer. See the [Month 6+ note](#the-month-6-elastic-buffer) below.
+  </Step>
+</Steps>
+
+---
+
+## Ruthless Narrowing
+
+For Track A, you pick **one technology per category** and go deep. You skim the rest. This is not a compromise — it is the strategy.
+
+| Category | Chosen Stack | Why one deep > many shallow |
+|---|---|---|
+| Relational DB | **MySQL 8 (InnoDB)** | Most common senior backend interview target; internals transfer directly to distributed DB design questions |
+| Wide-column / NoSQL | **Cassandra (reading-only)** | Teaches the Dynamo + Bigtable design space; no cluster needed to reach interview fluency |
+| KV / Cache | **Redis** | Single-system that covers data structures, eviction, Lua scripting, cluster topology, and Streams |
+| Message broker | **Kafka** | Forces mastery of partitioning, consumer-group coordination, and exactly-once — the hard distributed-systems questions |
+| Vector DB | Pick one when Track B project starts | Project-driven, not syllabus-driven |
+| Cloud / Orchestration | **AWS + Kubernetes** | Assumed baseline for senior backend roles |
+| Language | **Python (+ Go for infra roles)** | Python covers the AI track; Go covers systems tooling |
+| Agent framework | Pick one, know it deeply | Same principle — one framework to source-code depth beats five at tutorial depth |
+
+Going shallow on six databases gives you trivia. Going deep on one gives you a transferable mental model you can apply to any of the others in an interview.
+
+---
+
+## Track B — AI / Agents (Parallel Arc)
+
+Track B runs alongside Track A at roughly 25% of weekly time, but its weight shifts across the plan.
+
+**Months 1–3 (light reading phase — ~45 min/week)**
+Read one paper *or* skim one source file of an agent framework each week. Keep the investment small so Track A depth is not compromised. The weekly AI adversarial prompt keeps the reading active: *explain this week's concept to a systems engineer skeptical of LLMs — where does the explanation break?*
+
+**Months 4–6 (build phase)**
+Scale up to a shippable project. This is where the resume artifact for Track B comes from. Pick one project candidate at the start of Month 4 and commit to it through Month 6.
+
+**Project candidates** (choose exactly one):
+- Agent eval + observability platform — traces, replay, regression tests, cost/latency metrics
+- Coding or debugging assistant with retrieval + memory
+- Agent workflow orchestrator — durable execution, retries, human-in-the-loop
+
+<Note>
+  The deliberate non-goal here is collecting certifications or building five tiny demo apps. One long project, shipped and observable by Month 6, is worth more than five half-finished demos at every stage of the hiring process.
+</Note>
+
+---
+
+## Track C — Interview Prep (Always-On from Month 2)
+
+Track C never pauses. From Month 2 onward, every week includes:
+- **2 algorithm problems** — keep the muscle warm, not cold
+- **1 system-design writeup every 2 weeks** — written to interview-answer shape (requirements → design → trade-offs → failure modes)
+- **1 mock interview per month starting Month 3** — rehearse under pressure before Month 7
+
+Artifacts from Track A are your system-design source material. The writeups are not published — they are rehearsal reps.
+
+---
+
+## The Month 6+ Elastic Buffer
+
+<Note>
+  **If the plan slips, Month 6+ compresses first — not Months 3–5.**
+
+  The Cassandra block in Month 2's back half adds roughly two weeks of reading to the schedule. Those two weeks come out of the Month 6+ deep-choice buffer, not out of Caching, Messaging, or Reliability. Months 3–5 are fixed. Month 6+ is explicitly elastic.
+
+  If the plan slips further — a travel week, a demanding project at work, a rough month — the same rule applies: compress Month 6+, protect Months 3–5, and reset on Sunday rather than backfilling.
+</Note>

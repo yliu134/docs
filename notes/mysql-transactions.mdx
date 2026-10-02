@@ -1,0 +1,183 @@
+---
+title: 'MySQL Transactions, MVCC, and Isolation Levels'
+sidebarTitle: 'Transactions & MVCC'
+description: 'Understand InnoDB MVCC read views, all four isolation levels, gap and next-key locks, deadlock patterns, and the cost of MySQL''s REPEATABLE READ default.'
+---
+
+InnoDB's concurrency model rests on two separate mechanisms: MVCC handles reads, and a hierarchy of locks handles writes. The isolation level you choose governs which anomalies are permitted and which locks InnoDB acquires to prevent them. MySQL defaults to REPEATABLE READ — a stronger default than PostgreSQL's READ COMMITTED — and that single difference explains the majority of surprising deadlocks and blocked inserts that engineers encounter moving between the two databases.
+
+## MVCC: Readers Don't Block Writers
+
+Multi-Version Concurrency Control gives every transaction a consistent snapshot of the database at the time the transaction (or statement, depending on isolation level) began. Reads consult that snapshot rather than acquiring shared locks on every row they visit. The result is that **readers never block writers and writers never block readers** — a property that would be impossible with pure two-phase locking (2PL).
+
+InnoDB implements MVCC through the undo log. Every row carries two hidden fields:
+
+- **`DB_TRX_ID`** — the transaction ID of the last transaction that modified this row.
+- **`DB_ROLL_PTR`** — a pointer into the undo log where the previous version of this row can be reconstructed.
+
+When a transaction reads a row, it compares the row's `DB_TRX_ID` against its **read view** — a snapshot of which transactions were active, committed, or had not yet started at the moment the read view was created. If the current row version was written by a transaction the read view considers invisible, InnoDB follows `DB_ROLL_PTR` into the undo log to reconstruct an older version the snapshot can see. This reconstruction can chain through multiple undo records for heavily modified rows.
+
+<Note>
+Long-running transactions hold their read view open for the duration of the transaction. InnoDB's purge thread cannot reclaim undo records needed by any open read view. A single long analyst query against a write-heavy table can cause the undo log to grow unboundedly and force every read of hot rows to traverse a longer and longer version chain — a form of latency degradation that can persist for the duration of the query without producing any visible error.
+</Note>
+
+## The Four Isolation Levels
+
+<Tabs>
+  <Tab title="READ UNCOMMITTED">
+    **Permits dirty reads.** A transaction can read rows modified by other transactions that have not yet committed. If the writer rolls back, you have read data that never existed in a committed state. This level provides no meaningful consistency guarantee and is almost never used in production.
+  </Tab>
+  <Tab title="READ COMMITTED">
+    **Prevents dirty reads; permits non-repeatable reads.** Each statement within a transaction gets a fresh read view — it sees all rows committed by other transactions up to the moment that statement runs. If a row is updated and committed between two SELECT statements in your transaction, the second SELECT sees the new value.
+
+    Under READ COMMITTED, InnoDB does not hold gap locks. This eliminates a large class of deadlocks but also means the isolation level cannot prevent phantom rows — new rows matching your WHERE clause can appear between statements.
+
+    **Important:** Under RC, a blocked UPDATE re-reads the latest committed row and re-evaluates its WHERE predicate after acquiring the lock. This makes a single-statement `UPDATE ... WHERE remaining >= ?` safe as a compare-and-swap. A two-statement read-then-write pattern is not safe, because the read happened under an older snapshot.
+  </Tab>
+  <Tab title="REPEATABLE READ (Default)">
+    **Prevents dirty reads and non-repeatable reads.** The read view is taken once at the start of the transaction and held for the duration. Any row you read returns the same value if you read it again within the same transaction, regardless of concurrent commits by other transactions.
+
+    InnoDB extends REPEATABLE READ to prevent phantom rows through **next-key locks** (described below), which go beyond what the SQL standard requires. This is the default isolation level.
+  </Tab>
+  <Tab title="SERIALIZABLE">
+    **Prevents all anomalies.** SERIALIZABLE implicitly converts every plain `SELECT` into `SELECT ... FOR SHARE`, acquiring shared locks on every row read. Transactions execute as if they ran one at a time, in serial order. Maximum consistency; maximum contention. Rarely used except where absolute correctness is non-negotiable and concurrency can be sacrificed.
+  </Tab>
+</Tabs>
+
+## Lock Taxonomy
+
+<CardGroup cols={2}>
+  <Card title="Record Locks" icon="lock">
+    A lock on a single index record. `UPDATE ... WHERE id = 42` acquires an exclusive record lock on the index entry for id 42.
+  </Card>
+  <Card title="Gap Locks" icon="arrows-left-right">
+    A lock on the *gap* between two index records — or before the first record, or after the last. A gap lock on (10, 20) prevents any INSERT of a value between 10 and 20 exclusive. It does not prevent reads or modifications of existing rows in that range; it only prevents insertions into the gap.
+  </Card>
+  <Card title="Next-Key Locks" icon="key">
+    A record lock plus the gap lock preceding it — the standard locking unit under REPEATABLE READ. A next-key lock on value 20 locks the gap (10, 20] and the record at 20 itself. Together, next-key locks on a scanned range prevent any phantom rows from being inserted anywhere in that range.
+  </Card>
+  <Card title="Insert-Intention Locks" icon="circle-plus">
+    A special gap lock set by INSERT before inserting into a gap. Multiple INSERT-intention locks on the same gap are compatible with each other (concurrent inserts into the same gap do not block one another), but they are blocked by a gap lock held by another transaction.
+  </Card>
+</CardGroup>
+
+**Table-level intention locks (IS/IX):** Before acquiring row-level shared or exclusive locks, InnoDB sets an intention lock on the table — IS (intention shared) or IX (intention exclusive). These are compatible with each other but signal to DDL operations (which need a full table lock) that row-level locks exist.
+
+## Gap Locks in Practice
+
+Gap locks exist specifically to prevent phantom rows under REPEATABLE READ. Consider a query scanning the range `WHERE account_id BETWEEN 10 AND 20` — InnoDB acquires next-key locks on each record in that range *and* on the gaps between them. A concurrent `INSERT INTO ... (account_id) VALUES (15)` is blocked until the scanning transaction commits, even though account_id 15 does not exist yet.
+
+Without gap locks, the scanning transaction could read the range, another transaction could insert account_id 15 and commit, and a second scan within the original transaction would see 15 — a phantom. Gap locks close that window.
+
+<Warning>
+Gap locks are acquired even when a range query matches **zero rows**. A `SELECT ... WHERE account_id BETWEEN 100 AND 200 FOR UPDATE` with no rows in that range still acquires a gap lock on (100, 200), blocking any concurrent INSERT into that range. This surprises engineers who expect that "no rows found" means "no lock acquired."
+</Warning>
+
+## Deadlocks
+
+Next-key locks are the most common source of MySQL deadlocks in applications with concurrent writes. Because each transaction acquires locks incrementally as it scans, two transactions can reach a state where each holds a lock the other needs.
+
+**Classic concurrent upsert deadlock:**
+
+```sql
+-- Session A: insert or update for account 50
+START TRANSACTION;
+SELECT * FROM campaign_budget WHERE campaign_id = 50 FOR UPDATE;
+-- A holds next-key lock covering the gap around 50
+
+-- Session B (concurrently): insert or update for account 60
+START TRANSACTION;
+SELECT * FROM campaign_budget WHERE campaign_id = 60 FOR UPDATE;
+-- B holds next-key lock covering the gap around 60
+
+-- Session A now tries to insert a row in B's locked gap
+INSERT INTO campaign_budget (campaign_id, remaining) VALUES (55, 1000);
+-- A is blocked waiting for B's gap lock
+
+-- Session B now tries to insert a row in A's locked gap
+INSERT INTO campaign_budget (campaign_id, remaining) VALUES (52, 500);
+-- B is blocked waiting for A's gap lock
+-- InnoDB detects the cycle and rolls back one transaction (the cheaper one)
+```
+
+InnoDB detects deadlock cycles automatically and rolls back the transaction with the lower cost (measured by undo log records). The rolled-back transaction receives error 1213; the application must retry it.
+
+**Deadlock from inconsistent lock order:** Any transaction that acquires row locks on multiple rows can deadlock with another transaction that acquires the same rows in the opposite order. The fix is mechanical — always sort multi-row writes by primary key before executing them. This is the class of deadlock that survives code review because the orderings look unrelated in separate code paths.
+
+<Accordion title="Reading SHOW ENGINE INNODB STATUS for Deadlocks">
+When a deadlock occurs, InnoDB records the details of the last deadlock in its status output. Run `SHOW ENGINE INNODB STATUS\G` and look for the `LATEST DETECTED DEADLOCK` section. It shows:
+- Which transactions were involved
+- Which locks each held and which each was waiting for
+- Which transaction was rolled back as the victim
+
+The lock description format is: `lock_mode X locks gap before rec insert intention waiting` — parse this as: this transaction is waiting to acquire an exclusive insert-intention gap lock. If you see two transactions each waiting on a lock held by the other, that is the deadlock cycle.
+</Accordion>
+
+## Locking Reads
+
+<CodeGroup>
+```sql Exclusive Lock (FOR UPDATE)
+-- Acquires an exclusive next-key lock on every row (and gap) the query touches.
+-- Other transactions cannot read (with FOR SHARE), modify, or delete these rows
+-- until this transaction commits.
+SELECT remaining FROM campaign_budget
+WHERE campaign_id = 42
+FOR UPDATE;
+```
+
+```sql Shared Lock (FOR SHARE)
+-- Acquires a shared next-key lock. Multiple transactions can hold FOR SHARE
+-- on the same rows simultaneously. No transaction can hold FOR UPDATE
+-- on these rows until all FOR SHARE locks are released.
+SELECT remaining FROM campaign_budget
+WHERE campaign_id = 42
+FOR SHARE;
+```
+
+```sql SKIP LOCKED (Work Queues)
+-- Skips rows that are currently locked by another transaction rather than
+-- waiting. The correct primitive for building a work queue on MySQL 8.0+.
+-- Each worker dequeues a different batch of rows with no contention.
+SELECT * FROM job_queue
+WHERE status = 'pending'
+LIMIT 10
+FOR UPDATE SKIP LOCKED;
+```
+</CodeGroup>
+
+## Metadata Locks (MDL)
+
+InnoDB row locks protect data; **metadata locks** protect the schema. Any statement that accesses a table acquires an MDL on it for the duration of the transaction — including long-running SELECT queries. A DDL operation (ALTER TABLE, DROP TABLE) requires an exclusive MDL before it can proceed.
+
+The classic outage pattern: a long-running SELECT holds a shared MDL; an `ALTER TABLE` queues waiting for the exclusive MDL; every subsequent query on that table — including fast reads that take milliseconds — queues behind the ALTER. The table appears completely frozen to the application. The ALTER itself may be the symptom; the real culprit is the long-running transaction holding the shared MDL that is blocking the ALTER.
+
+## Durability Knobs
+
+Two settings control the durability guarantee at commit time. Both have production implications:
+
+| Setting | Value | Guarantee |
+|---|---|---|
+| `innodb_flush_log_at_trx_commit` | `1` (default) | Redo log fsync on every commit. Full ACID durability. Required for financial data. |
+| `innodb_flush_log_at_trx_commit` | `2` | Write to OS buffer, fsync each second. Survives MySQL crash; loses last ~1s on OS crash. Common on replicas. |
+| `sync_binlog` | `1` | Binlog fsync on every commit. Required for GTIDs and consistent failover. |
+| `sync_binlog` | `0` | Binlog synced by OS. Faster; risks binlog divergence on crash. |
+
+Relaxing these settings on replicas (where re-sync from the primary is possible after a crash) is standard practice to reduce fsync pressure on replica hardware.
+
+## Evolution Questions
+
+<Accordion title="Why MVCC over 2PL for reads — and what does MVCC cost?">
+Two-phase locking (2PL) acquires shared locks on every row a transaction reads and holds them until commit. Under 2PL, a long-running read blocks any writer trying to modify those rows, and a writer blocks readers. Throughput degrades badly under mixed read/write workloads.
+
+MVCC separates read consistency from write locking. Readers see a snapshot from the undo log and never acquire shared locks; writers acquire exclusive locks on modified rows but don't block readers. This allows read and write transactions to proceed concurrently at the cost of maintaining the undo log.
+
+The cost of MVCC is undo log retention. The undo log cannot be purged past the oldest active read view. Long-running transactions pin old undo records, causing undo growth and lengthening the version chain that subsequent readers of modified rows must traverse. High write rates combined with long-running analytics queries produce the steepest version-chain growth.
+</Accordion>
+
+<Accordion title="Why gap locks and next-key locks under REPEATABLE READ? What class of bug were they fixing?">
+REPEATABLE READ guarantees that a row you read once returns the same value if you read it again. But without gap locks, a transaction could read a *range* of rows (e.g., `WHERE amount > 100`), another transaction could insert a new row with `amount = 150` and commit, and a second range scan in the original transaction would return a different set — a phantom read.
+
+Standard MVCC snapshot isolation prevents phantoms for plain reads (the snapshot simply ignores the new row), but locking reads (`FOR UPDATE`, `FOR SHARE`) and writes bypass the snapshot and operate on current data. Gap locks extend the protection to these operations by preventing any INSERT into the scanned range until the transaction commits.
+
+The price is a new class of deadlock: two transactions scanning overlapping ranges each acquire gap locks that block the other's insertions, and if both then try to insert, they deadlock. Moving to READ COMMITTED eliminates gap locks entirely, which removes this deadlock class but means you must restructure every range-based invariant into either a single-row lock or a unique-key collision.
+</Accordion>

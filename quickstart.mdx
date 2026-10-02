@@ -1,47 +1,94 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Engineering Growth Framework in One Day"
+sidebarTitle: "Quick Start"
+description: "The concrete steps to orient yourself in the framework, set up your study environment, and walk into your first week with a clear plan."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+By the end of this page you will have read the monthly roadmap and understood where you are in it, committed to a weekly time budget, set up your notes environment, created your first week's task list, and know exactly what to read on Day 1 of Month 1. None of these steps take more than a few hours total. Do them all before you open a book.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+---
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Read the Roadmap">
+    Open [ROADMAP.md](https://github.com/yliu134/engineering-growth/blob/main/ROADMAP.md) and read it end-to-end — not to memorize it, but to build a mental map of what you are committing to.
 
-    ```bash
-    npm install your-package
-    ```
+    Pay attention to three things:
+    - The **monthly syllabus** under Track A — this is the sequential spine of the plan. Each month has a focus area, a depth bar, a set of evolution questions, and a set of AI adversarial prompts. Understand what "depth bar" means before you start.
+    - The **three checkpoints** — Month 3 (always-interview-ready), Month 6 (job-search-ready), and Month 7–8 (active interviewing). These are your success criteria, not arbitrary milestones.
+    - The **deliberate non-goals** — what the plan explicitly excludes is as important as what it includes.
+
+    Identify which month you are starting in. If you are starting at Month 1, your first topic is Databases. Proceed to Step 2.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
-    ```
+  <Step title="Set Your Time Budget">
+    Commit to a fixed weekly schedule before you start. The reference schedule is:
+
+    | Day | Time | Hours |
+    |---|---|---|
+    | Tuesday | 7:00 – 9:00 pm | 2 hrs |
+    | Thursday | 7:00 – 9:00 pm | 2 hrs |
+    | Saturday | 9:00 am – 1:00 pm | 4 hrs |
+    | **Total** | | **~15 hrs/week** |
+
+    Adapt the specific days to your life — but protect the total. Fifteen hours a week is the calibration the plan is built around. Significantly less and the syllabus will not fit the eight-month window. Significantly more and you risk burning out by Month 4.
+
+    Put the sessions in your calendar as recurring blocks **now**, before you have a reason to skip them. The blocks are not aspirational — treat them as fixed commitments.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+  <Step title="Set Up Your Notes Environment">
+    [Obsidian](https://obsidian.md) is the recommended notes tool. The plan's notes are structured for it and use wikilinks between notes — those links work in Obsidian but render as plain text elsewhere.
+
+    Create a vault (or a folder in an existing vault) for Engineering Growth. Every note you write follows the same four-section structure:
+
     ```
+    ## Core ideas
+    ## Notes
+    ## Connections
+    ## Open questions
+    ```
+
+    **Core ideas** is written from memory after reading — what survives that exercise is what actually stuck. **Open questions** are left honest and unresolved; they are the highest-value section on re-read, because they show you exactly where your understanding has edges.
+
+    Add frontmatter to each note with at minimum `status` (e.g., `draft` / `complete`) and `tags` (the topic and track).
+
+    Do not move on from a topic because you finished reading it. Move on when **Core ideas** can be reconstructed on a whiteboard without the note open.
+  </Step>
+
+  <Step title="Create Your First Week's Reminders List">
+    Before you start reading, write your first week's task list. Use the reminders template in [REMINDERS_TEMPLATE.md](https://github.com/yliu134/engineering-growth/blob/main/REMINDERS_TEMPLATE.md) as the format.
+
+    A good first-week list for Month 1 Databases includes:
+    - Specific DDIA chapters to read (start with Ch 1–3)
+    - The MySQL InnoDB Storage Engine docs section to open
+    - One adversarial AI prompt to run (from the Month 1 list in the Roadmap)
+    - The Sunday review block — scheduled, not optional
+
+    Keep the list short enough that completing everything is realistic. The plan's default posture is to do less and do it to the depth bar, not to cover more ground at lower resolution.
+  </Step>
+
+  <Step title="Read the Learning Method Page">
+    Before you open DDIA Chapter 1, read the [Learning Method](/learning-method) page in this documentation.
+
+    The four techniques — deep read, local instance, evolution history, and AI adversarial verification — apply to every topic in Track A. Knowing them before Month 1 means you apply them from day one rather than retrofitting them halfway through. Specifically, understand the depth rule (mechanism and trade-off, not implementation) before you start, because it answers "how deep do I go?" once, for every topic in the plan.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+---
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+## What to Read First
+
+If you are starting at **Month 1–2 (Databases)**, your reading entry points are:
+
+- ***Designing Data-Intensive Applications*** (Kleppmann) — Chapters 1–7. This is the spine for all of Months 1–5 and the conceptual framework for everything else. Start here.
+- **MySQL Reference Manual — InnoDB Storage Engine chapter** — all of it. The non-negotiable sections are: buffer pool, redo log and undo log, MVCC, clustered indexes, transactions, isolation levels (including gap and next-key locks), and replication.
+- **Percona Blog** — subscribe and read one post per week alongside the books. This is the best MySQL engineering blog available and provides the real-world texture that the reference manual does not.
+
+Do not start with blog posts. Start with DDIA Ch 1–3 in your first session. Blog posts are supplements, not the spine.
+
+<Tip>
+**The depth rule, applied from day one.** For every mechanism you read about, stop when you can state: what it does, what problem it was introduced to solve, and what it cost. That is the bar — and it is lower than you think. For InnoDB gap locks, the bar is: they prevent phantom reads under REPEATABLE READ, the alternative was full serialization, and the cost is a class of deadlock that surprises people. You do not need to read `lock0lock.cc`. Stopping at the right depth is a skill. Practice it from the first chapter.
 </Tip>
+
+<Note>
+**About start dates.** The plan is calibrated for an **August 2026 start**, running through March 2027. If you are starting at a different time, shift the monthly boundaries accordingly — the syllabus structure does not change. The month numbers in the Roadmap are ordinal (Month 1, Month 2…), not calendar-specific, so "Month 1" is simply whatever month you begin.
+</Note>

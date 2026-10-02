@@ -1,0 +1,104 @@
+---
+title: 'Caching Reading List: Redis, Patterns, and Papers'
+sidebarTitle: 'Caching'
+description: 'Curated Month 3 caching reading list: Redis internals and cluster docs, cache pattern references, and the canonical Scaling Memcache at Facebook paper.'
+---
+
+Month 3 of the framework is dedicated to caching. Redis internals, eviction algorithms, and cache patterns — cache-aside, write-through, write-back, refresh-ahead — are the core. By the end of this month you should be able to name the failure mode of every cache pattern, explain Redis's single-threaded model and what changed in Redis 6, and walk through a production cache stampede without notes. This list covers the spine documentation, the one supplement worth your time, two canonical papers, and the engineering blogs that have the best real-world case studies.
+
+---
+
+## Spine
+
+<CardGroup cols={2}>
+  <Card title="Redis Official Documentation" icon="book">
+    **redis.io/docs**
+
+    Read the **Internals** section and the **Cluster specification** end-to-end. Redis has unusually good documentation — the internals pages explain the actual data structures, memory layout, and design decisions, not just the API. The Cluster spec explains slot-hashing, resharding, and failover. This is the spine for Month 3; treat it the way you treated the MySQL reference manual in Months 1–2.
+  </Card>
+  <Card title="Redis in Action" icon="book">
+    **Josiah Carlson · Manning**
+
+    Dated in its API coverage, but the patterns chapter is still the clearest introduction to cache-aside, write-through, and write-back in a practical context. Read the patterns chapter and use the rest as a reference. Don't read it cover-to-cover.
+  </Card>
+</CardGroup>
+
+---
+
+## Canonical Papers
+
+<Note>
+  Two papers this month. Read both adversarially: abstract and introduction first, then ask your AI to challenge you on the claims before you read the methodology and results.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Scaling Memcache at Facebook" icon="file-lines">
+    **Nishtala et al. · NSDI 2013**
+
+    The canonical paper on operating a cache at scale. Covers the lease mechanism (stampede prevention), invalidation driven off MySQL binlog, regional consistency, and how Facebook evolved Memcache from a single-machine cache to a globally consistent layer. The lease design is the part you should understand in detail — it directly influences how you'd design cache invalidation in any large system.
+  </Card>
+  <Card title="TAO: Facebook's Distributed Data Store for the Social Graph" icon="file-lines">
+    **Bronson et al. · USENIX ATC 2013**
+
+    Facebook's purpose-built graph cache and store, built on top of MySQL and Memcache. TAO shows what happens when cache-aside at scale isn't enough — when you need a cache that understands your data model. Read this after the Memcache paper for context on how the two systems interacted.
+  </Card>
+</CardGroup>
+
+<Tip>
+  Read the Scaling Memcache paper in adversarial mode. After the abstract and intro, ask your AI: *"What are the three biggest consistency risks in this design, and how does the lease mechanism address each one?"* Then read the rest of the paper checking whether your answers were right. The lease section (stampede prevention) and the invalidation-driven-off-MySQL-binlog section are the two mechanisms you must be able to explain without the paper in front of you.
+</Tip>
+
+---
+
+## Engineering Blogs
+
+<Tip>
+  One post per week during Month 3. Focus on posts that describe production failures and how they were debugged — that's where the real mechanism knowledge lives.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="antirez.com" icon="pen-nib">
+    **Salvatore Sanfilippo — Redis Creator**
+
+    Sanfilippo's personal blog covers the design decisions behind Redis in a way no documentation can. Posts on why Redis is single-threaded, why Streams were added, and how the cluster design evolved are essential reading for understanding the *why* behind the internals docs.
+  </Card>
+  <Card title="Netflix TechBlog — EVCache Series" icon="pen-nib">
+    **Netflix Engineering**
+
+    Netflix EVCache is one of the largest Redis/Memcache deployments in the industry. The EVCache series covers multi-region caching, replication, and the operational challenges of running a distributed cache at Netflix scale.
+  </Card>
+  <Card title="Discord Engineering" icon="pen-nib">
+    **Discord**
+
+    Discord's posts on Redis usage cover hot key problems, memory pressure, and the operational realities of running Redis in a high-concurrency environment. Read alongside the Jepsen analyses for a balanced view of Redis's consistency guarantees.
+  </Card>
+  <Card title="Cloudflare Blog — Edge Cache Posts" icon="pen-nib">
+    **Cloudflare**
+
+    Cloudflare's edge caching posts cover CDN-level caching strategy, cache invalidation at global scale, and the intersection of caching with network design. Different layer than Redis, but the invalidation and consistency problems are the same.
+  </Card>
+</CardGroup>
+
+**Segment's cache-stampede postmortem** is the canonical real-world example of a cache stampede in production — search for it directly. It is a short read and illustrates exactly why the Facebook lease mechanism exists.
+
+---
+
+## Evolution Questions to Drive Your Reading
+
+Work through these questions as you read. They are the depth test for Month 3.
+
+<Accordion title="Why is Redis single-threaded? What did Redis 6+ threaded I/O change?">
+  The single-threaded model gives Redis lock-free atomicity on every command — no concurrent modifications, no need for locking inside data structures. Redis 6 added threaded I/O for network reads and writes, not command execution. The command execution loop remains single-threaded. Know the distinction and what each change did and didn't affect.
+</Accordion>
+
+<Accordion title="Why did Memcache lose ground to Redis? What was Redis's actual moat?">
+  It wasn't just "more data types." Think about persistence, replication, Lua scripting atomicity, Pub/Sub, and the Cluster mode. Then ask: which of those features does Memcache deliberately not have, and why might that still be the right choice for some workloads?
+</Accordion>
+
+<Accordion title="Why did Redis add Streams? What was wrong with Pub/Sub?">
+  Pub/Sub is fire-and-forget — if a consumer is offline, messages are lost. Streams are a persistent, consumer-group-aware log. Know the four properties Streams added and when you'd still choose Pub/Sub over Streams.
+</Accordion>
+
+<Accordion title="Why does Redis Cluster use slot-hashing instead of consistent hashing?">
+  The Dynamo paper popularized consistent hashing. Redis Cluster explicitly did not use it. Understand the resharding and rebalancing trade-offs that drove the slot-based design, and what consistent hashing would have made harder.
+</Accordion>

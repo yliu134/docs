@@ -1,0 +1,130 @@
+---
+title: 'InnoDB Internals: Buffer Pool, Redo Log, and Undo'
+sidebarTitle: 'InnoDB Internals'
+description: 'Understand InnoDB''s buffer pool, WAL redo log, undo log, clustered index, and crash recovery — internals behind MySQL behavior under load and failure.'
+---
+
+InnoDB is MySQL's default storage engine, and understanding its internals is what separates engineers who tune by intuition from those who reason from first principles. The engine sits below the MySQL server layer — which handles parsing, the optimizer, and the binary log — while InnoDB owns the redo log, undo log, buffer pool, and all crash-recovery machinery. That two-layer split explains why MySQL has *two* logs (binlog above, redo log below) and why "MySQL" and "InnoDB" are properly separate subjects.
+
+## The Clustered Index: The Table *Is* the B+ Tree
+
+InnoDB stores every table as a B+ tree ordered by primary key. This is the single highest-leverage fact about InnoDB — it shapes insert performance, secondary index costs, and query locality.
+
+- **Leaf pages hold full rows** in PK order. Accessing a row via its primary key is a single traversal to the leaf and you have the entire row.
+- **Range scans benefit from locality.** Because rows are physically ordered by PK, a range scan reads contiguous leaf pages from disk — far more efficient than random I/O.
+- **Secondary indexes store the PK, not a row pointer.** A lookup on a secondary index traverses that B+ tree to find the PK, then traverses the clustered index again to get the full row. This double traversal is the cost of every non-covering secondary-index lookup.
+- **PK width is a tax on every secondary index.** Every secondary index leaf page stores the PK alongside the index key. A 16-byte UUID PK means every secondary index pays that 16-byte overhead per entry.
+
+<Warning>
+**Never use UUIDv4 as a primary key on a large InnoDB table.** Random UUIDs produce random insert positions in the clustered B+ tree, causing page splits and write amplification across the entire index. Use UUIDv7 (time-ordered) or an auto-increment integer to keep inserts at the right-hand edge of the tree and avoid splitting existing pages.
+</Warning>
+
+## The Buffer Pool: InnoDB's Primary Memory Knob
+
+The buffer pool is InnoDB's in-memory page cache — the single most important tuning parameter for read performance. When InnoDB reads a page from disk, it loads it into the buffer pool. Subsequent reads of that page are served from memory. When a page is modified in memory, it becomes a **dirty page** and must eventually be flushed to disk.
+
+<CardGroup cols={2}>
+  <Card title="Midpoint LRU Insertion" icon="list">
+    The buffer pool uses a modified LRU list split into a "young" (hot) sublist and an "old" (cold) sublist. Newly loaded pages enter at the midpoint — the head of the old sublist — not at the front. Only after a page is accessed again does it move into the young sublist.
+  </Card>
+  <Card title="Why Midpoint Matters" icon="shield">
+    A full table scan loads thousands of pages, each accessed exactly once. By inserting at the midpoint, InnoDB prevents a single large scan from evicting the working set that the rest of the application depends on.
+  </Card>
+</CardGroup>
+
+**Key operational point:** `innodb_buffer_pool_size` is typically set to 70–80% of available RAM on a dedicated database host. A buffer pool that's too small forces repeated disk reads for pages that should be cached; the buffer pool hit rate (available in `performance_schema`) tells you how often InnoDB is finding what it needs in memory.
+
+## The Redo Log: Write-Ahead Logging
+
+InnoDB uses write-ahead logging (WAL). When you commit a transaction, the changes are written sequentially to the redo log files first — before the modified pages in the buffer pool are flushed to their data files on disk. This is why MySQL commit is fast even for large writes: sequential log writes are orders of magnitude faster than random data-file writes.
+
+```text
+Transaction commit path:
+  1. Write changes to buffer pool pages (in memory, fast)
+  2. Write redo log records sequentially to redo log files (fsync — this is the durable commit)
+  3. Return success to the client
+  4. Later: flush dirty buffer pool pages to data files (background)
+```
+
+The redo log is **physiological** — it records physical changes at the page level, which makes it both precise for crash recovery and a good fit for streaming to replicas (physical replication). It operates as a circular set of files; when the tail catches the head, InnoDB must pause and flush dirty pages to make room — which is why an undersized redo log can become a throughput bottleneck.
+
+<Note>
+`innodb_flush_log_at_trx_commit` controls the durability guarantee. Value `1` (the default) fsyncs the redo log on every commit — full durability, slowest. Value `2` writes to the OS buffer but does not fsync — survives MySQL crash but not OS crash. Value `0` is dangerous and should not be used for money or irreplaceable data.
+</Note>
+
+## The Undo Log: MVCC and Rollback
+
+The undo log stores old row versions. It serves two purposes:
+
+1. **Transaction rollback.** If a transaction is rolled back or the database crashes mid-transaction, the undo log provides the before-image to restore the row to its prior state.
+2. **MVCC (Multi-Version Concurrency Control).** When a transaction reads a row under REPEATABLE READ or READ COMMITTED, InnoDB may need to show a version of that row from before some other transaction's modification. It walks the undo chain — following `DB_ROLL_PTR` pointers — to reconstruct the appropriate historical version.
+
+<Accordion title="InnoDB MVCC vs PostgreSQL VACUUM: A Key Trade-off">
+
+**InnoDB approach:** Old row versions live in the undo log, separate from the table's data pages. The clustered index holds only the current row. A reader that needs an older version traverses the undo chain to reconstruct it.
+
+**PostgreSQL approach:** Old row versions (dead tuples) live *in the table itself*, alongside live rows. The table heap accumulates dead tuples over time. `VACUUM` is the background process that reclaims dead-tuple space.
+
+**The trade-off:** InnoDB avoids table bloat from dead tuples — your data pages stay compact — but the undo log can grow very large if a long-running transaction holds a read view open and prevents InnoDB's purge thread from discarding old versions. A single 40-minute analyst query can cause the undo log to balloon and force every read of a hot row to walk a longer and longer version chain, degrading write latency over hours with no obvious triggering event. PostgreSQL instead shows table bloat, which at least shows up as storage growth.
+
+</Accordion>
+
+## Crash Recovery
+
+InnoDB's crash recovery follows a well-defined sequence:
+
+<Steps>
+  <Step title="Redo phase">
+    On startup after a crash, InnoDB replays all redo log records forward from the last checkpoint. This brings data-file pages back to the state they were in at the moment of the crash — including any dirty-page writes that hadn't made it to disk.
+  </Step>
+  <Step title="Undo phase">
+    After redo, some transactions may be partially committed — their redo records are present but the commit record never landed. InnoDB uses the undo log to roll back these incomplete transactions, restoring rows to their pre-transaction state.
+  </Step>
+  <Step title="Checkpointing (ongoing)">
+    During normal operation, InnoDB periodically writes a checkpoint record to the redo log indicating that all dirty pages up to a given LSN (log sequence number) have been flushed to disk. This bounds the amount of redo log that must be replayed after any future crash — and is why redo log size matters for recovery time.
+  </Step>
+</Steps>
+
+## Additional Internal Structures
+
+<Accordion title="Doublewrite Buffer">
+InnoDB writes pages to a doublewrite buffer in the system tablespace before writing them to their final position in the data files. If a crash occurs mid-page-write (a "torn page"), InnoDB can recover the intact copy from the doublewrite buffer. This protects against partial 16 KB page writes when the underlying storage writes in smaller units (e.g., 4 KB OS pages).
+</Accordion>
+
+<Accordion title="Change Buffer">
+When a secondary index page is not in the buffer pool, InnoDB can buffer the index update in the change buffer (in memory and on disk) rather than performing a random I/O to load the page just to update it. The change buffer is merged into the actual index pages later, when those pages are loaded for other reasons. Only applies to non-unique secondary indexes — unique indexes require an immediate read to check for duplicates.
+</Accordion>
+
+<Accordion title="Adaptive Hash Index">
+InnoDB monitors access patterns and, for index values accessed very frequently with exact lookups, builds a hash index in memory on top of the B+ tree. This turns O(log n) B+ tree traversals into O(1) hash lookups for hot keys — with no configuration required. It can be disabled with `innodb_adaptive_hash_index=OFF` if the mutex contention it introduces outweighs the lookup benefit for a given workload.
+</Accordion>
+
+## Why MyISAM Lost to InnoDB
+
+MyISAM was MySQL's original default storage engine and is now effectively dead for production use. Understanding why clarifies what InnoDB was designed to guarantee:
+
+| Property | MyISAM | InnoDB |
+|---|---|---|
+| Transactions | None | Full ACID |
+| Crash recovery | None (requires full table repair) | Redo log + undo log |
+| Locking granularity | Table-level | Row-level |
+| Foreign keys | Not supported | Supported |
+| MVCC | None | Full implementation |
+
+MyISAM had no crash recovery — an unclean shutdown could corrupt the table and require `REPAIR TABLE`. It locked the entire table for any write, serializing all concurrent access. Without transactions, there was no way to guarantee that two related writes either both succeeded or both rolled back. Once InnoDB matured, there was no scenario where MyISAM's simpler design was worth those costs.
+
+## Evolution Questions
+
+<Accordion title="Why B+ trees over binary trees or hash indexes for range scans?">
+A binary search tree is unbalanced and has no locality guarantees — adjacent keys in value space can be anywhere in memory. A hash index maps keys to buckets with O(1) point lookups but destroys ordering; you cannot do a range scan on a hash index because hashing is specifically designed to spread values uniformly, not preserve their order relationship.
+
+A B+ tree keeps all data in leaf pages, which are linked in order. A range scan starts at the left boundary (a point lookup) and then follows leaf-page pointers in sequence — reading pages that are physically close on disk. The tree stays balanced with O(log n) height for all operations. For a storage engine built around disk I/O, the ordered-leaf-page property of B+ trees is the decisive advantage.
+</Accordion>
+
+<Accordion title="Why does InnoDB use undo log for MVCC rather than dead-tuple/VACUUM (Postgres)? What did that trade for what?">
+InnoDB keeps old versions in the undo log and the clustered index holds only the current row. This keeps data pages compact — a full table scan reads only live rows, with no dead tuples to skip. There is no VACUUM process needed.
+
+The cost is undo log growth under long-running read transactions. InnoDB's purge thread can only reclaim undo records that no active read view needs. A single long-running transaction pins the oldest read view, preventing purge from advancing, and the undo log grows until that transaction completes. Every read of a modified row then must traverse a longer version chain to reconstruct the appropriate snapshot.
+
+PostgreSQL's trade is the reverse: dead tuples accumulate in the table itself, VACUUM runs to reclaim them, and table bloat is the visible cost. The failure mode is table size growth rather than undo growth and read slowdown.
+</Accordion>

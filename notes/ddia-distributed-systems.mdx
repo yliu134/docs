@@ -1,0 +1,187 @@
+---
+title: 'Distributed Systems: Clocks, Faults, and Consensus'
+sidebarTitle: 'Distributed Systems'
+description: 'Unreliable networks, clock skew, process pauses, and Byzantine faults make distributed systems fail in ways single machines never do. Chapters 8 and 9 map the failure modes and the guarantees that survive them.'
+---
+
+Distributed systems fail in ways that single-machine systems don't. On a single machine, an operation either completes or doesn't — you know which. Across a network, you can send a request and receive no reply, and you cannot tell whether the request was never received, was received and processed but the reply was lost, or the remote node is simply slow. This uncertainty is not an edge case — it is the operating condition. Understanding these failure modes is the prerequisite for reasoning about consistency guarantees and for knowing which ones are achievable at all. Chapters 8 and 9 of DDIA cover the trouble first, then the guarantees that survive it.
+
+## Chapter 8: The Trouble with Distributed Systems
+
+Chapter 8 catalogs the assumptions that silently break once a system spans more than one machine.
+
+### Unreliable Networks
+
+The network between machines in a distributed system is fundamentally unreliable. When you send a request and receive no response, there are at least three possibilities you cannot distinguish:
+
+- Your request was lost (packet drop)
+- The remote node received your request but its reply was lost
+- The remote node received your request, is processing it, but is slow — the response is still in flight
+
+This is **partial failure**: some parts of the system are working while others are not, and the boundary between them is invisible from any single vantage point.
+
+<Warning>
+  You cannot distinguish between a slow node and a dead node over an asynchronous network. Timeouts are the only tool, and they can only decide when to *stop waiting* — not what actually happened. A node that times out may have executed the operation successfully.
+</Warning>
+
+Networks add variable latency on top of packet loss. Queueing at the NIC, at the OS network stack, at a switch, and at the receiving application all contribute. A packet that normally takes 1 ms can take 1 second or more when a switch queue fills up. **Bounded latency is not a guarantee on commodity Ethernet** — it requires specialized hardware (real-time networks, InfiniBand). Most distributed systems must be designed assuming unbounded network delay.
+
+### Unreliable Clocks
+
+Distributed systems need clocks for two distinct purposes, served by two different clock types:
+
+<CardGroup cols={2}>
+  <Card title="Wall-Clock Time" icon="clock">
+    Returns the current time of day (e.g., `System.currentTimeMillis()`). Synchronized via NTP. Susceptible to **clock skew** — two machines' clocks can differ by milliseconds to seconds. Can jump forwards or backwards when NTP corrects drift. **Unsafe for ordering events across machines.**
+  </Card>
+  <Card title="Monotonic Clock" icon="arrow-trend-up">
+    Returns an always-increasing value (e.g., `System.nanoTime()`). Never goes backwards. Meaningless for cross-machine comparison — two machines' monotonic clocks start from arbitrary points and drift at different rates. **Safe for measuring elapsed time on one machine; useless across machines.**
+  </Card>
+</CardGroup>
+
+NTP synchronization is bounded but imperfect. Under good conditions, NTP achieves ±tens of milliseconds. Under poor conditions (congested network, VM time skew, misconfigured servers), the drift can be much larger. GPS receivers (as used by Google Spanner's TrueTime) reduce uncertainty to microseconds, but at significant operational cost.
+
+<Note>
+  The practical consequence: **never use wall-clock timestamps to determine the order of events across machines.** Last-Write-Wins based on `System.currentTimeMillis()` can discard a causally later write from a machine with a lagging clock. This is not a theoretical concern — it is exactly the hazard in Cassandra's LWW model that DDIA calls out.
+</Note>
+
+### Process Pauses
+
+Even a node that is otherwise functioning can appear dead from the network's perspective due to process pauses. DDIA lists several real causes:
+
+- **Garbage collection (GC) stop-the-world pauses.** A JVM full GC can pause all application threads for seconds. During the pause, the process sends no heartbeats, responds to no requests. From the outside, it looks dead.
+- **OS scheduling.** The OS can preempt a thread at any point. In a VM, the hypervisor can suspend the entire VM to run another VM on the same host.
+- **Disk I/O blocking the application thread.** A thread that performs a synchronous disk write can be blocked for seconds if the disk queue is deep.
+- **Memory swapping.** If the process is paged out to disk, resuming it requires faulting pages back in — seconds of latency.
+
+A process can pause, miss heartbeats and timeouts, be declared dead by the cluster, and then resume — having no idea that the world moved on without it. This is the **zombie leader** problem.
+
+### Truth Is Defined by the Majority
+
+A node cannot determine, from its own perspective alone, whether it is the current leader. It may believe it is the leader while a quorum of other nodes have moved on and elected a new one. Acting on that belief — accepting writes, issuing locks — causes data corruption.
+
+**Fencing tokens** are the standard solution. When a lock service grants a lease, it issues an incrementing **fencing token** number. Every operation that uses the lock must present its token to the resource being protected. The resource rejects any request with a token number lower than one it has already seen. Even if a zombie leader wakes up and tries to write, its stale fencing token is rejected.
+
+<Accordion title="Why fencing tokens solve the zombie leader problem">
+  The zombie leader holds lease token 33. While it was paused, the lock service issued token 34 to a new leader, which has been operating successfully. The zombie wakes up, believes it is still the leader, and sends a write to the storage node with token 33.
+
+  The storage node has already processed writes with token 34. It compares: 33 < 34. The write is rejected. The zombie leader cannot cause data corruption regardless of its belief about its own status.
+
+  This works because the resource — the storage node — enforces the ordering, not the client. A client cannot protect against its own staleness; the server it calls must do it.
+</Accordion>
+
+### Byzantine Faults
+
+The failure models discussed so far assume nodes are **crash-stop** — they fail by stopping, not by sending malicious or incorrect data. A **Byzantine fault** is when a node sends arbitrary, incorrect, or deliberately adversarial messages.
+
+Byzantine fault tolerance is required in environments where nodes cannot be trusted: public blockchain networks, military systems, inter-organizational distributed systems. It is generally *not* required within a single organization's datacenter, where physical control over all nodes is assumed.
+
+<Note>
+  DDIA covers Byzantine faults briefly and notes they are largely out of scope for the chapter's practical focus. For backend engineers in a standard cloud environment, the assumption is crash-stop failures. Byzantine fault-tolerant consensus (BFT) algorithms exist but are significantly more expensive and complex.
+</Note>
+
+## Chapter 9: Consistency and Consensus
+
+Chapter 9 asks what guarantees a distributed system can actually provide, and which are provably impossible.
+
+### The Consistency Hierarchy
+
+"Consistency" has different meanings at different points in DDIA. In the context of replication and distributed systems, it refers to what a client can observe about the ordering and visibility of writes:
+
+<Steps>
+  <Step title="Eventual Consistency (Weakest)">
+    If no new writes occur, all replicas will *eventually* converge to the same value. No guarantee about when. Reads can return stale data indefinitely. The weakest useful guarantee and the default for most leaderless systems.
+  </Step>
+  <Step title="Causal Consistency">
+    Writes that are causally related (one depends on the other) are seen in causal order by all nodes. Concurrent writes (causally unrelated) may be seen in any order. Stronger than eventual consistency; weaker than linearizability. Achievable without coordination costs as high as linearizability.
+  </Step>
+  <Step title="Linearizability (Strongest Useful)">
+    The strongest single-object consistency guarantee. Operations appear to execute atomically at a single instant in real time. Once a write completes, all subsequent reads (by any client, on any replica) must return that value or a later one. The system behaves as if there is a single copy of the data.
+  </Step>
+</Steps>
+
+### Linearizability
+
+Linearizability means the system is **recency-consistent**: if operation A completes before operation B starts (in real time), then B must see the result of A. The system appears to be a single, immediately-consistent copy of the data.
+
+Linearizability is expensive. It requires coordination across all replicas for every read and write. **Single-leader replication with synchronous reads from the leader** achieves it — but sacrifices availability: if the leader is unavailable, no reads or writes are served. Multi-leader and leaderless systems are fundamentally not linearizable in the face of network partitions.
+
+<Accordion title="The CAP theorem in one paragraph">
+  **CAP** (Consistency-Availability-Partition tolerance) is often invoked here. The precise statement: in the presence of a network partition, you must choose between **consistency** (linearizability — all nodes return the same value) and **availability** (every request receives a response, even if it may be stale). You always have to tolerate partitions in a real network — they happen. So the real choice is: when a partition occurs, do you return possibly-stale data or do you refuse to serve?
+
+  DDIA's position: CAP is a useful framing but an oversimplification. "Consistency" in CAP means specifically linearizability, not all consistency models. And the choice is not binary — there are many consistency models between eventual and linear, and availability degrees between full and none.
+</Accordion>
+
+### Ordering and Causal Consistency
+
+**Causality** imposes a partial order on events: if event A happened before event B (A caused B, or B read A's result), the system must respect that order. Causal consistency is the strongest model achievable without paying the full cost of linearizability.
+
+**Total order broadcast** is a communication primitive that delivers every message to every node in the same order, with no gaps. It is equivalent to a replicated log. Kafka achieves total order broadcast within a partition. Total order broadcast can implement linearizable storage: if you use it to log every write, and every node applies writes in log order, all nodes converge to the same state.
+
+### Consensus
+
+**Consensus** is the problem of getting a set of nodes to agree on a single value. It underlies:
+- **Leader election** (which node is the current leader?)
+- **Atomic commit** (did this distributed transaction commit or abort?)
+- **Distributed locks** (which node holds the lock?)
+
+<Note>
+  Consensus is hard because of the **FLP impossibility result** (Fischer, Lynch, Paterson, 1985): in a fully asynchronous system with even one potentially faulty node, no deterministic consensus algorithm can guarantee termination. In practice, the way out is adding timing assumptions (timeouts) — which is what all real consensus algorithms do.
+</Note>
+
+The two canonical consensus algorithms are:
+
+<Tabs>
+  <Tab title="Paxos">
+    The original consensus algorithm, described by Leslie Lamport (1989, published 1998). Paxos is correct and has been extensively analyzed. It is also notoriously difficult to understand and implement correctly, especially the multi-round variant (Multi-Paxos) needed for a replicated log.
+
+    **Used by:** Google Chubby (distributed lock service), Google Spanner (cross-region transactions).
+
+    The core insight: a proposal requires agreement from a **quorum** (majority) of nodes. Two rounds of message exchange (prepare + accept) ensure that any value accepted by a majority was proposed with knowledge of any previously accepted value.
+  </Tab>
+  <Tab title="Raft">
+    Designed by Ongaro and Ousterhout (2014) explicitly for **understandability**. Raft decomposes consensus into three sub-problems: leader election, log replication, and safety. Each sub-problem has a clean, independent mechanism.
+
+    **Used by:** etcd (Kubernetes coordination store), CockroachDB, TiKV, Consul.
+
+    The core insight: at any time, exactly one leader manages the replicated log. The leader accepts entries from clients, replicates them to followers, and commits once a majority acknowledges. Leader election uses randomized timeouts to avoid split votes.
+  </Tab>
+</Tabs>
+
+<Tip>
+  Raft vs. Paxos is not primarily a performance debate — they are comparable in message complexity and fault tolerance. Raft was designed to be implementable by someone who can understand it completely. The strong recommendation from DDIA and the broader systems community: if you are implementing consensus, use Raft or an existing library (etcd, ZooKeeper). Do not implement Paxos unless you have a very specific reason.
+</Tip>
+
+### Total Order Broadcast vs. Linearizability
+
+These two guarantees are closely related but distinct:
+
+| Property | Total Order Broadcast | Linearizability |
+|---|---|---|
+| What it guarantees | Every message delivered to every node in the same order | Every read sees the most recent write |
+| Scope | A stream of messages (operations) | Single-object reads and writes |
+| Relationship | Can implement linearizable storage | Can implement total order broadcast |
+| Example system | Kafka (within a partition) | Single-leader DB with synchronous reads |
+
+Total order broadcast is what you need to build a **replicated state machine**: if every node starts in the same state and applies the same sequence of commands in the same order, they stay in sync. This is the foundation of Raft's log replication.
+
+## Connections to Production Systems
+
+| System | Relevant concept | Detail |
+|---|---|---|
+| **Kafka** | Total order broadcast | Kafka guarantees total order within a partition. Across partitions, no ordering guarantee. This is why partition key selection matters for causally related events. |
+| **ZooKeeper** | Consensus service | Built on ZAB (ZooKeeper Atomic Broadcast), a Paxos variant. Provides distributed locks, leader election, and configuration management. Used by older Kafka for broker coordination (replaced by KRaft in Kafka 3+). |
+| **etcd** | Consensus service | Built on Raft. The coordination backbone of Kubernetes. Stores cluster state, service discovery, and distributed locks. |
+| **Cassandra** | Eventual / tunable consistency | Not linearizable. Quorum reads (`W+R>N`) give partial protection but not full recency. Lightweight transactions (Paxos per-partition) add linearizability at higher cost. |
+| **Spanner** | Linearizability across datacenters | Uses TrueTime (GPS + atomic clocks) to bound clock uncertainty and achieve external consistency at global scale. The exception that proves the rule — it works by making clock assumptions explicit and bounding them. |
+
+## The Practical Summary
+
+These two chapters together answer the question: *what can you actually guarantee?*
+
+- Networks are unreliable and asynchronous — you cannot detect failures, only time out on them.
+- Clocks are unreliable — never order events across machines using wall-clock time.
+- Processes pause unpredictably — a node that was the leader five seconds ago may no longer be.
+- Consensus is achievable but expensive — use Raft-based systems (etcd, ZooKeeper) where you need it; don't roll your own.
+- Linearizability is the strongest practical guarantee — it costs availability during partitions and coordination overhead at all times.
+- Eventual consistency is the default of leaderless/multi-leader systems — understand which anomalies it permits and design your application to tolerate them, or add the mechanisms that prevent them.

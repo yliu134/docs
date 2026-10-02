@@ -1,0 +1,77 @@
+---
+title: 'Setting Up Your Weekly Apple Reminders System'
+sidebarTitle: 'Reminders'
+description: 'Build a fresh weekly Reminders list from your README plan every Sunday — a disposable cache that keeps you on track without accumulating undone-task debt.'
+---
+
+The Reminders list is a disposable weekly cache. It exists for one week and then gets deleted — not rolled forward. The `README.md` is the source of truth for the plan; the Reminders list is just this week's surface. That distinction matters: the README lives forever, the list does not.
+
+## The Structure
+
+Create a new list in Apple Reminders every Sunday named `Week of YYYY-MM-DD`. Copy this structure in exactly, filling in next week's items from the `README.md` Current week section.
+
+```
+Week of YYYY-MM-DD
+
+Track A — Fundamentals
+  ☐ [item 1 from ROADMAP current month]     Due: Tue 7pm
+  ☐ [item 2]                                 Due: Thu 7pm
+  ☐ Weekend artifact (if scheduled)          Due: Sat 9am
+
+Track B — AI (light or scaled up)
+  ☐ Paper OR framework file                  Due: Fri evening
+
+Track C — Interview prep (from Month 2)
+  ☐ Algo problem #1                          Due: Tue 9pm
+  ☐ Algo problem #2                          Due: Thu 9pm
+  ☐ System-design writeup (biweekly)         Due: Sat 1pm
+
+Review
+  ☐ Sunday review — use reviews/template.md  Due: Sun 7pm
+```
+
+The due dates are not aspirational — they're the schedule's skeleton. Track A items land on Tuesday and Thursday evenings because those are the two dedicated weeknight blocks. The Saturday morning slot is for the artifact. The Sunday 7pm reminder is the only one that recurs automatically; create it once and leave it.
+
+## The Sunday Setup Process
+
+<Steps>
+  <Step title="Read the README Current week section">
+    Open `README.md` and read the **Current week** heading. Note next week's Track A items, any Track B paper, and whether a system-design writeup is due (they're biweekly). Also note your Q6 answer from the Sunday review you just completed — that item goes first on the Track A list.
+  </Step>
+  <Step title="Create the new Reminders list">
+    In Apple Reminders, create a new list named `Week of YYYY-MM-DD` where the date is next Monday. Do not reuse last week's list and do not rename it. A fresh list is a fresh slate.
+  </Step>
+  <Step title="Copy in the checklist with due dates">
+    Paste the structure above and fill in the specific items from the README. Set due dates as shown. If a Track C item isn't applicable this week (e.g., system-design writeup is off-cycle), leave the row out entirely rather than leaving it unchecked.
+  </Step>
+  <Step title="Update the README Current week heading">
+    Change the `## Current week` heading in `README.md` to next week's date range and update the items under it to match what you just put in the Reminders list. The README and the list should describe the same week.
+  </Step>
+  <Step title="Commit README and review file together">
+    Run `git add README.md reviews/YYYY-MM-DD.md && git commit -m "review: YYYY-MM-DD"`. Committing them together keeps the record clean: one commit closes the old week and opens the new one.
+  </Step>
+</Steps>
+
+## The Rules
+
+These rules are not preferences. Each one exists because the opposite creates a specific failure mode.
+
+<CardGroup cols={1}>
+  <Card title="Delete or complete — never roll forward" icon="trash">
+    At the end of each week, every item on the list is either checked off or deleted. Incomplete items do not move to next week's list. If the work matters, it comes back next week from the roadmap — which is the source of truth. Rolling it forward is a lie the list tells you about what happened.
+  </Card>
+  <Card title="If it matters, it comes back" icon="arrow-rotate-right">
+    Nothing important disappears permanently when you delete an undone item. The roadmap holds the full plan. Next Sunday, when you read the Current week section, the item that mattered will surface again. Trust the roadmap, not the list.
+  </Card>
+  <Card title="Set the Sunday review as a recurring reminder" icon="clock">
+    Create one recurring reminder: **Sunday review — use reviews/template.md — Due: Sun 7pm**. Set it to repeat weekly. This is the one item you should never have to manually recreate. Everything else gets rebuilt from the README each week; this one runs itself.
+  </Card>
+</CardGroup>
+
+<Tip>
+  Use Reminders' **Scheduled** view as your day-of surface. Add the widget to your lock screen or home screen so the day's due items are visible without opening the app. The friction of opening a tool to check your plan is exactly where intentions go to die.
+</Tip>
+
+<Warning>
+  Rolling undone tasks forward creates weight and shame. A list that carries last Tuesday's unfinished item into this Tuesday is a record of failure, not a plan. A clean slate — built fresh from the roadmap every Sunday — is a record of honesty. Start each week clean.
+</Warning>

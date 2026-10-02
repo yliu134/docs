@@ -1,0 +1,175 @@
+---
+title: 'Cassandra Consistency Levels, Quorums, and Anti-Entropy'
+sidebarTitle: 'Consistency'
+description: 'Cassandra tunable consistency: R+W>RF quorum, last-write-wins timestamps, read repair, Merkle tree anti-entropy, and tombstone resurrection explained.'
+---
+
+Cassandra's consistency is tunable per operation: you choose, at query time, how many replicas must agree before a read or write succeeds. That dial lets you trade consistency for availability and latency on a statement-by-statement basis, rather than setting a fixed isolation level for the entire database. Understanding where that dial's limits lie — and why it still cannot guarantee freshness under certain conditions — is the single most interview-relevant part of the Cassandra knowledge base.
+
+## Consistency Levels
+
+Every read and write statement can carry a consistency level annotation. The most important ones are:
+
+<CardGroup cols={2}>
+  <Card title="ONE" icon="1">
+    The request succeeds as soon as a single replica responds. Fastest, lowest latency, but returns stale data whenever replicas are out of sync. Use for metrics, logs, or any data where brief inconsistency is acceptable.
+  </Card>
+  <Card title="QUORUM" icon="users">
+    The request succeeds when ⌊RF/2⌋ + 1 replicas respond — a strict majority. Balances consistency and availability. The standard choice for most production workloads.
+  </Card>
+  <Card title="LOCAL_QUORUM" icon="building">
+    Quorum within the local datacenter only. Does not wait for cross-datacenter acknowledgement. The standard multi-DC answer: you get QUORUM-grade consistency without the cross-DC latency penalty on every operation.
+  </Card>
+  <Card title="ALL" icon="check-double">
+    Every replica must respond. Strongest consistency — reads are guaranteed fresh if all replicas are live — but the failure of any single replica blocks the operation. Rarely appropriate in production.
+  </Card>
+</CardGroup>
+
+<Note>
+  `ANY` is a write-only consistency level: the write succeeds as soon as any node — including just storing a hint on the coordinator — accepts it. It is the weakest possible guarantee and is only useful when you need to absorb a write even if every replica is down, accepting that the data may not be readable until replicas recover.
+</Note>
+
+## The R + W > RF Rule
+
+The key insight governing when Cassandra can deliver read-your-writes consistency is:
+
+<CodeGroup>
+  ```text The Rule
+  R + W > RF
+
+  Where:
+    R  = replicas that must respond to a read
+    W  = replicas that must acknowledge a write
+    RF = replication factor
+  ```
+  ```text RF=3 Example (QUORUM + QUORUM)
+  QUORUM reads  = ⌊3/2⌋ + 1 = 2
+  QUORUM writes = ⌊3/2⌋ + 1 = 2
+  R + W = 2 + 2 = 4 > RF (3)
+
+  → The read and write replica sets must overlap by at least one node.
+  → At least one node that participated in the write will respond to the read.
+  → That node has the most recent value.
+  ```
+  ```text Below the threshold (ONE + ONE, RF=3)
+  ONE reads  = 1
+  ONE writes = 1
+  R + W = 1 + 1 = 2 ≤ RF (3)
+
+  → The single node that responds to the read may not be the one that
+    received the write. Stale data is expected behavior, not a bug.
+  ```
+</CodeGroup>
+
+### When R + W > RF Still Returns Stale Data
+
+Meeting the quorum rule guarantees overlap — but it does not guarantee that the *fastest* responders are the most up-to-date ones.
+
+<Accordion title="The stale-quorum scenario">
+  Suppose RF=3, you write with QUORUM (W=2), and two nodes — call them A and B — acknowledge the write. Node C never received it (perhaps it was briefly slow, not down).
+
+  Now you read with QUORUM (R=2). The coordinator contacts all three replicas and accepts the first two responses. If nodes A and C respond first, C returns stale data. The coordinator will notice the digest mismatch and initiate a read repair in the background, but the value returned to the client is determined by last-write-wins timestamp resolution — the most recent timestamp wins.
+
+  This means: `R + W > RF` guarantees that at least one up-to-date replica is in the read's response set, not that the stale responder is excluded from influencing the result. In practice, Cassandra returns the cell with the highest timestamp, which in this case is correct — A's value beats C's. But the resolution depends on accurate wall-clock timestamps, which leads directly to the LWW clock-skew hazard.
+</Accordion>
+
+## Conflict Resolution: Last-Write-Wins on Cell Timestamps
+
+When replicas disagree on the value of a cell, Cassandra resolves the conflict by comparing timestamps and returning the value with the highest timestamp. This is last-write-wins (LWW).
+
+<Tabs>
+  <Tab title="How LWW works">
+    Timestamps are recorded at the **cell level** (individual column values), not at the row level. The coordinator typically assigns a microsecond-resolution wall-clock timestamp at write time, though clients can supply their own. On read, when replicas return conflicting values, the cell with the highest timestamp is used and the others are overwritten during repair.
+  </Tab>
+  <Tab title="Divergence from the Dynamo paper">
+    The original Dynamo paper used **vector clocks** for conflict detection, combined with application-side reconciliation: when conflicting versions existed, the application received all versions and merged them (the shopping-cart example). This was semantically richer — an application could apply domain logic to the merge — but significantly more complex to implement and operate.
+
+    Cassandra dropped vector clocks in favor of LWW, buying simplicity at a concrete cost: two concurrent writes to the same cell, where the losing write had a slightly higher system clock, will silently discard the "winning" write. There is no merge, no conflict notification, and no way to recover the discarded value.
+  </Tab>
+  <Tab title="Clock skew as a data-loss mechanism">
+    Because LWW resolution depends entirely on wall-clock timestamps, clock skew between nodes is not just a monitoring concern — it is a silent data-loss mechanism. If node A's clock is 100ms ahead of node B's, a write arriving at B after a write at A can silently overwrite A's value because B's lower timestamp makes its write appear "older." NTP synchronization is not optional in a Cassandra cluster.
+  </Tab>
+</Tabs>
+
+## Three Anti-Entropy Mechanisms
+
+Cassandra provides three mechanisms for repairing divergent replicas. Each covers a different failure scenario, and only the third is complete.
+
+<Steps>
+  <Step title="Hinted Handoff">
+    When a replica is briefly unavailable during a write, the coordinator stores the write as a hint and replays it when the replica recovers. Covers brief transient failures only — hints expire after `max_hint_window` (default 3 hours). If a replica is down longer than the hint window, hinted handoff provides no coverage.
+  </Step>
+  <Step title="Read Repair">
+    On a read that contacts multiple replicas, the coordinator compares digests of the returned data. When it detects inconsistency, it identifies the stale replicas and sends them the correct value. For consistency levels of `QUORUM` and above, read repair can be synchronous (the coordinator waits for the repair before returning). For lower levels, it runs in the background. Read repair only fires on data that is actively read — it cannot fix divergence in rarely-accessed data.
+  </Step>
+  <Step title="Anti-Entropy Repair (nodetool repair)">
+    The only mechanism that catches all divergence, including data missed by both hinted handoff and read repair. `nodetool repair` compares **Merkle trees** between replicas: each replica builds a hash tree over its token range, the coordinator compares the trees, and only the differing subtrees are streamed. Full repair must be run within `gc_grace_seconds` for every partition that has seen deletes, or tombstone resurrection becomes possible. This is a standing operational requirement, not a one-time recovery action.
+  </Step>
+</Steps>
+
+<Note>
+  The repair hierarchy is: hinted handoff catches brief failures → read repair heals data you read → anti-entropy repair heals everything else. Only anti-entropy repair is complete. The rule of thumb: run `nodetool repair` on every node more frequently than `gc_grace_seconds` (default 10 days). Most operators run it weekly.
+</Note>
+
+## Merkle Tree Anti-Entropy: How It Works
+
+<Accordion title="Merkle tree comparison in detail">
+  A Merkle tree is a binary hash tree where each leaf node contains the hash of a data segment, and each internal node contains the hash of its children's hashes. The root hash represents the entire dataset.
+
+  During `nodetool repair`, each replica independently builds a Merkle tree over the token range being repaired. The coordinator then compares the root hashes of two replicas. If they match, the data is identical — no transfer needed. If they differ, the coordinator descends into the tree, comparing child hashes recursively until it identifies the specific leaf-level segments that differ. Only those segments are streamed between replicas.
+
+  This design makes repair efficient: comparing entire partitions worth of data is reduced to a tree traversal that is O(log N) in the number of partitions. The data transfer is proportional to the divergence, not the dataset size.
+</Accordion>
+
+## Tombstones and gc_grace_seconds
+
+Cassandra implements deletes as writes. Rather than removing data from SSTables immediately, a delete appends a **tombstone** marker — a record that says "this cell was deleted at timestamp T." The actual data removal happens during compaction, but only after `gc_grace_seconds` has elapsed.
+
+<Steps>
+  <Step title="Why tombstones exist">
+    The LSM storage engine writes to immutable SSTables. Modifying an existing SSTable in-place would require reading, decrypting, and rewriting it — an expensive random-write operation that destroys the sequential-write throughput advantage of the LSM design. Tombstones turn deletes into sequential appends, consistent with the write-optimized engine.
+  </Step>
+  <Step title="Why gc_grace_seconds exists">
+    If a replica was down when a delete was issued, it never received the tombstone. When that replica comes back, it still holds the original data. The tombstone must outlive the maximum time a replica can be down and still recover via hinted handoff or repair. `gc_grace_seconds` (default 864000 seconds = 10 days) is that window. The tombstone is safe to purge only after this window, because by then, either the replica has seen the tombstone or it has been repaired.
+  </Step>
+  <Step title="The tombstone resurrection hazard">
+    Tombstone resurrection occurs when a replica misses a delete and that tombstone is purged (gc_grace expires) before repair runs. When the replica comes back:
+    - It has the original data, no tombstone.
+    - The other replicas have purged the tombstone and no longer have the data either.
+    - A read touching this replica returns the deleted data as if it never was deleted.
+
+    The deleted data has been resurrected. There is no automatic detection; the application receives a row it believes was deleted. The only prevention is running repair within `gc_grace_seconds` on every node, every cycle.
+  </Step>
+</Steps>
+
+<Warning>
+  Lowering `gc_grace_seconds` to reclaim disk space faster is a common and dangerous mistake. It shrinks the window within which a replica can recover from a failure without tombstone resurrection. Unless you have a disciplined repair schedule that is guaranteed to complete within your shortened window — accounting for repair failures, node restarts, and cluster events — do not lower `gc_grace_seconds` below the default.
+</Warning>
+
+## Tombstone Read Amplification
+
+Tombstones don't only create resurrection risk — they degrade read performance while they exist.
+
+<Accordion title="The queue anti-pattern">
+  A queue-like access pattern — write a message, read it, delete it — is one of the worst fits for Cassandra's storage model. The workflow generates one tombstone per consumed message. Because tombstones are not removed until compaction (and compaction only runs after `gc_grace_seconds`), a heavily-used queue partition accumulates tombstones that must be scanned on every subsequent read of that partition.
+
+  Cassandra exposes `tombstone_warn_threshold` (default 1000 tombstones per query) and `tombstone_failure_threshold` (default 100,000) to surface this problem. When a read encounters more than the failure threshold, Cassandra raises an exception rather than returning partial data silently. Hitting this threshold in production means your workload is fundamentally mismatched to the storage model.
+</Accordion>
+
+## Lightweight Transactions
+
+For compare-and-set operations — create a user only if the username isn't taken, update a record only if the version matches — Cassandra offers lightweight transactions (LWT) using an internal Paxos protocol.
+
+```sql
+-- Only inserts if no row with this email exists
+INSERT INTO users (email, name) VALUES ('user@example.com', 'Alice')
+IF NOT EXISTS;
+
+-- Only updates if the current status matches
+UPDATE orders SET status = 'shipped'
+WHERE order_id = ? IF status = 'processing';
+```
+
+<Warning>
+  LWT requires approximately four network round trips (prepare → promise → propose → commit in Paxos). Under contention — multiple clients competing for the same partition — these round trips serialize, and latency compounds. LWT is an escape hatch for specific correctness requirements, not a general concurrency primitive. If you find yourself using LWT frequently, the access pattern likely belongs in a system with native transaction support.
+</Warning>

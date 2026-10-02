@@ -1,0 +1,121 @@
+---
+title: 'Three Parallel Tracks: Systems, AI, and Interview Prep'
+sidebarTitle: 'Tracks'
+description: 'Run three tracks each week at fixed weights — 65% systems fundamentals, 25% AI project work, and 10% always-on interview prep starting Month 2.'
+---
+
+Every week of the 8-month plan runs three tracks simultaneously. Track A carries the heaviest weight — deep, sequential systems fundamentals. Track B runs a parallel AI/agents arc that starts light and builds toward a shippable project. Track C is a low-overhead, always-on interview-prep habit that starts Month 2 and never stops. The tracks are not equal in time, but all three are mandatory. Dropping one to feed another is a known failure mode.
+
+---
+
+## Track A — Systems Fundamentals (65%)
+
+Track A is sequential and non-negotiable. You cover one primary topic per month, apply all four learning techniques to each topic, and close every topic with a weekend artifact.
+
+**The four learning techniques** (apply to every Track A topic):
+
+<Tabs>
+  <Tab title="Deep Read to a Bar">
+    Books and official documentation are the spine. The bar: on any random page of the source material, you can state the term, its role in the overall system, and the rough mechanism — with no unresolved terms.
+
+    **The depth rule (mechanism and trade-off, not implementation):** for any feature, know what it does, what problem it was introduced to solve, and what it cost. Then move on. Do not read the source code. This rule settles "how deep do I go?" once, for every topic in the plan.
+  </Tab>
+  <Tab title="Local Instance + Play">
+    Install and experiment with a system only where hands-on is the cheapest path to understanding a mechanism — not as a per-topic requirement. Reading and case studies carry more weight than hands-on for a job-switch goal on this timeline.
+
+    Per-topic local instance sections in the syllabus are **optional**, not required. Mechanisms you cannot reproduce without a cluster are marked as unverified in your notes, not asserted as fact.
+  </Tab>
+  <Tab title="Evolution History">
+    For every design decision, ask: *why this instead of the older thing?* Trade-offs are the real content. When you face a design decision at work, most of the answer already exists somewhere in a widespread technology's evolution — you need to have absorbed it.
+  </Tab>
+  <Tab title="AI Adversarial Verification">
+    Use an AI weekly to expose gaps in your understanding. Effective prompts: *"in a scenario ill-suited for X, design X to support it — then tell me what breaks in production,"* *"tear this explanation apart,"* *"give me the interview question that would catch me faking it."*
+
+    The goal is to surface what you think you know but do not. Run this every week, on every topic.
+  </Tab>
+</Tabs>
+
+### Monthly Topics
+
+<CardGroup cols={2}>
+  <Card title="Months 1–2 · Databases" icon="database">
+    DDIA chapters 1–7. MySQL 8 / InnoDB internals: buffer pool, redo log, undo log, MVCC, clustered index, isolation levels, gap locks, next-key locks, replication, and Vitess sharding.
+  </Card>
+  <Card title="Month 2 Back Half · Cassandra" icon="circle-nodes">
+    Reading-only (~2 weeks). Dynamo half (consistent hashing, tunable consistency, gossip, hinted handoff) + Bigtable half (LSM storage, compaction, tombstones, query-first modeling). No local install.
+  </Card>
+  <Card title="Month 3 · Caching" icon="bolt">
+    Redis internals, eviction algorithms (approximated LRU/LFU), cache patterns (cache-aside, write-through, write-back, refresh-ahead), invalidation, stampede prevention, hot-key handling.
+  </Card>
+  <Card title="Month 4 · Messaging + Distributed Systems" icon="arrows-split-up-and-left">
+    Kafka: partitioning, consumer groups, offsets, exactly-once semantics, log compaction. Consensus via Raft: leader election, log replication, retries, idempotency.
+  </Card>
+  <Card title="Month 5 · Reliability + Observability" icon="chart-line">
+    Distributed tracing, metrics, structured logging, OpenTelemetry (collector, spans, context propagation), load testing, performance profiling. Instrument a prior artifact end-to-end.
+  </Card>
+  <Card title="Month 6+ · Deep Choice" icon="code">
+    Read source code for one system: MySQL/InnoDB, Kafka, or a Raft implementation (etcd or TiKV). Each session is driven by a specific question — no open-ended browsing. This is the plan's elastic buffer.
+  </Card>
+</CardGroup>
+
+---
+
+## Track B — AI / Agents (25%)
+
+Track B runs in parallel with Track A, but its weight is deliberately back-loaded. Months 1–3 are a light-reading phase; Months 4–6 are the build phase. The same four learning techniques apply, but the "local instance" is your project itself and the "book" is source code and papers.
+
+### Months 1–3 · Light Reading (~45 min/week)
+
+Each week, read **one paper** or skim **one source file** from an agent framework you actively use. Keep the time investment small — Track A depth is the priority in these months.
+
+Every week, run the AI adversarial prompt for this track:
+
+> *"Explain this week's AI concept to a systems engineer who is skeptical of LLMs. Where does the explanation break down?"*
+
+This keeps the reading active and tests whether your understanding can survive contact with a hostile but technically rigorous audience.
+
+### Months 4–6 · Scale Up — The Shippable Project
+
+At the start of Month 4, pick one project candidate and commit to it through Month 6. Do not switch projects mid-plan.
+
+<CardGroup cols={1}>
+  <Card title="Agent Eval + Observability Platform" icon="magnifying-glass-chart">
+    Build a platform that traces agent runs, supports replay, runs regression tests across prompt/model changes, and surfaces cost and latency metrics. Combines systems depth (observability, storage) with AI application.
+  </Card>
+  <Card title="Coding / Debugging Assistant with Retrieval + Memory" icon="robot">
+    A coding assistant that retrieves relevant context from a codebase and maintains session memory. Directly applicable to the retrieval-augmented generation design space covered in Track B reading.
+  </Card>
+  <Card title="Agent Workflow Orchestrator" icon="diagram-project">
+    A durable workflow engine for agent tasks: retries, checkpointing, human-in-the-loop steps, and failure recovery. Tests your understanding of distributed systems (Raft, Kafka) applied to agent coordination.
+  </Card>
+</CardGroup>
+
+The project must be **deployed and observable by Month 6** — instrumented with OTEL, producing traces and metrics, and something you can demo. An undeployed project is not a resume artifact.
+
+<Note>
+  **One long project (Track B), not five.** The deliberate non-goals for this track are: collecting AI certifications, following every new LLM release, building ten tiny demo apps, picking up trendy frameworks without understanding their fundamentals, and treating prompt engineering as an identity. One shippable project that demonstrates systems thinking applied to AI is worth more to a hiring manager than a portfolio of tutorials.
+</Note>
+
+---
+
+## Track C — Interview Prep (10%, always-on from Month 2)
+
+Track C starts in Month 2 and never pauses. The time investment is small — roughly 10% of the weekly budget — but consistency is everything. A cold algorithm muscle and a zero system-design rep count are the two most common reasons strong engineers underperform in senior loops.
+
+**Every week from Month 2 onward:**
+
+<Steps>
+  <Step title="2 algorithm problems">
+    Not a sprint — a cadence. Two problems per week keeps the muscle warm without consuming Track A time. If a week collapses, the algorithm problems are the last thing you drop.
+  </Step>
+  <Step title="1 system-design writeup every 2 weeks">
+    Write a full answer in interview shape: stated requirements → design → trade-offs → failure modes. Use your Track A artifacts as raw material — the mechanisms you studied are the answers to real system-design questions. These writeups are not published; they are rehearsal reps.
+  </Step>
+  <Step title="1 mock interview per month starting Month 3">
+    Run a mock under realistic conditions: timed, spoken aloud, with someone pushing back on your design choices. The goal is to rehearse under pressure before Month 7, not to evaluate your knowledge — you know your knowledge. You are rehearsing the performance of it.
+  </Step>
+</Steps>
+
+<Tip>
+  System design is the round that most often decides a senior backend interview loop — and the slowest skill to build from scratch. Starting in Month 2, even at low volume, means you have eight months of compounding reps by the time Month 7 arrives. Do not treat Track C as optional until Month 6.
+</Tip>

@@ -1,0 +1,129 @@
+---
+title: 'DDIA: Reliable, Scalable, Maintainable Systems'
+sidebarTitle: 'DDIA Overview'
+description: 'DDIA is the spine of Track A Months 1–5, covering reliability, scalability, and maintainability — the three properties every data system must trade off.'
+---
+
+*Designing Data-Intensive Applications* by Martin Kleppmann is the spine reading for Track A Months 1–5. Every subsequent topic in the systems track — storage engines, replication, distributed transactions, consensus — builds on the vocabulary and governing trade-offs that Chapter 1 introduces. The chapter reads fast, but it earns its place: the three words in the title are not marketing copy, they are measurable properties, and most engineering debates reduce to a disagreement about which one to prioritize.
+
+## The Three Properties
+
+<CardGroup cols={3}>
+  <Card title="Reliability" icon="shield-check">
+    The system continues to work correctly — at the right level of performance — even when things go wrong. Faults are expected; failures are what you prevent.
+  </Card>
+  <Card title="Scalability" icon="chart-line">
+    As the system grows in data volume, traffic, or complexity, there are reasonable ways to deal with that growth. Growth must be described before it can be managed.
+  </Card>
+  <Card title="Maintainability" icon="wrench">
+    Over time, many different people can work on the system productively. Operability, simplicity, and evolvability are the three sub-properties.
+  </Card>
+</CardGroup>
+
+## Reliability: Fault vs. Failure
+
+The most important distinction in this chapter is also the one most frequently blurred in conversation: a **fault** is one component deviating from spec; a **failure** is the whole system stopping to provide the required service. Your goal is to build fault-tolerant systems — systems that survive faults without becoming failures.
+
+<Note>
+  Tolerating faults is not the same as preventing them. You cannot prevent a hard drive from dying, a cosmic ray from flipping a bit, or an operator from running the wrong migration. Fault tolerance means the system degrades gracefully when those inevitable events occur.
+</Note>
+
+DDIA distinguishes three categories of fault:
+
+<Steps>
+  <Step title="Hardware Faults">
+    Disk failures, RAM errors, power outages, network card failures. Historically handled by redundancy — RAID arrays, dual power supplies, hot-standby servers. At large enough scale, hardware failures become a daily routine, not an exceptional event.
+  </Step>
+  <Step title="Software Errors">
+    Systematic faults that tend to cause many simultaneous failures: bugs triggered by unusual input, runaway processes consuming shared resources, cascading failures across services. Harder to handle than hardware faults because they violate the assumption that nodes fail independently.
+  </Step>
+  <Step title="Human Errors">
+    Misconfiguration is the leading cause of outages, not hardware failures. Mitigations include well-designed abstractions that make the right action easy, sandbox environments that decouple experimentation from production, and fast rollback paths.
+  </Step>
+</Steps>
+
+## Scalability: Describing Load
+
+You cannot reason about scaling without first describing load precisely. DDIA introduces **load parameters** as the tool for that description — the numbers that characterize your system's workload.
+
+The right load parameters depend on the system. For a web server, it might be requests per second. For a database, it might be the ratio of reads to writes. For Twitter's fan-out problem — the example DDIA uses — it's the distribution of followers per user, because that single number determines whether broadcasting a tweet is cheap (write once, read many) or expensive (write to every follower's timeline on post).
+
+<Tip>
+  Choosing the wrong load parameter leads to the wrong scaling strategy. If your p99 latency is caused by a small number of users with very large fan-out, scaling horizontally without addressing that tail achieves nothing. Describe the skew before designing the solution.
+</Tip>
+
+### Percentile Latency: Why p99 Beats the Mean
+
+Once you can describe load, you describe performance under load. DDIA makes a strong case that **response time percentiles** are the correct unit — not averages.
+
+The mean response time tells you very little because it averages together fast and slow requests. A single 10-second request averaged with 999 ten-millisecond requests looks like 20 ms average — but one user in a thousand had a terrible experience.
+
+<Accordion title="Why percentiles matter: the concrete case">
+  Suppose you have these response times across 1,000 requests:
+  - 950 requests completed in 10 ms → p50 ≈ 10 ms
+  - 40 requests took 100 ms
+  - 9 requests took 1,000 ms
+  - 1 request took 10,000 ms
+
+  **Mean:** roughly 30 ms — looks fine.  
+  **p99:** 1,000 ms — one in a hundred users waits a full second.  
+  **p99.9:** 10,000 ms — the worst user waits ten seconds.
+
+  In a checkout flow with SLA targets, p99 is the contractual number. The mean is irrelevant.
+</Accordion>
+
+The practical notation: **p50** is the median, **p95/p99/p999** are the tail. High percentiles (p99, p999) are called **tail latencies**.
+
+### Tail Latency Amplification in Fan-Out
+
+Tail latency compounds dangerously in architectures where a single user-facing request fans out to multiple backend calls. If a page requires 100 backend requests, the probability that at least one of them hits p99 latency approaches certainty — even if each individual request hits p99 only 1% of the time.
+
+<Warning>
+  In a parallel fan-out to *n* services, the slowest response sets the total latency. With n=100 services each at 99% fast, the probability of *no* slow call is 0.99^100 ≈ 37%. You're more likely than not to experience tail latency on every single request.
+</Warning>
+
+This is why optimizing tail latency specifically — not just average latency — matters for any architecture that aggregates results from multiple downstream services.
+
+## Maintainability: Three Sub-Properties
+
+Maintainability is about the people who build and operate the system after you. DDIA breaks it into three:
+
+<CardGroup cols={3}>
+  <Card title="Operability" icon="gears">
+    Make it easy for operations teams to keep the system running. Good monitoring, predictable behavior, documented failure modes, easy rollback.
+  </Card>
+  <Card title="Simplicity" icon="cube">
+    Remove accidental complexity — complexity that comes from implementation choices, not the problem itself. Good abstractions hide implementation details without leaking them.
+  </Card>
+  <Card title="Evolvability" icon="arrows-rotate">
+    Make it easy to change the system in the future. Also called extensibility or plasticity. Closely tied to Chapter 4 (encoding and schema evolution).
+  </Card>
+</CardGroup>
+
+## Depth Bar for Chapter 1
+
+The depth bar from the roadmap: on any random DDIA page, you can state the term, its role in the overall system, and the rough mechanism. For Chapter 1, that means:
+
+<Accordion title="What 'depth bar met' looks like for key terms">
+  **Fault tolerance:** You know it means surviving component failures without becoming a system failure, and that it's achieved through redundancy, timeouts, and graceful degradation — not by making individual components perfect.
+
+  **Load parameter:** You know it's a number that describes the shape of your workload (e.g., requests/sec, read/write ratio, fan-out distribution), and that picking the wrong load parameter sends you down the wrong scaling strategy.
+
+  **p99 latency:** You know it means 99% of requests complete faster than this value, why it's more useful than mean latency, and why tail latency amplifies in fan-out architectures.
+
+  **Accidental complexity:** You know Kleppmann borrows this from Fred Brooks — complexity that the system carries because of implementation choices, not because the problem itself demands it.
+</Accordion>
+
+## Connections to Later Chapters
+
+Chapter 1's vocabulary echoes through the rest of DDIA. When you reach later chapters, these mappings activate:
+
+| Ch 1 concept | Where it resurfaces |
+|---|---|
+| Fault vs. failure | Ch 8 — partial failure in distributed systems |
+| Load parameters + fan-out | Ch 5 — replication lag under high write load |
+| Percentile latency | Ch 3 — LSM compaction's tail latency spikes |
+| Maintainability / evolvability | Ch 4 — encoding and schema evolution |
+| Scalability trade-offs | Ch 6 — partitioning strategies |
+
+The index note's framing is worth keeping: *the chapters are the spine, not the content*. Chapter 1 supplies the measuring instruments. Every chapter that follows is a case study in what you discover when you apply them.

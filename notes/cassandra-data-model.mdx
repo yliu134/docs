@@ -1,0 +1,156 @@
+---
+title: 'Cassandra Data Modeling and Query-First Design Patterns'
+sidebarTitle: 'Data Model'
+description: 'Cassandra query-first modeling: partition and clustering keys, denormalization, CQL limits, secondary index trade-offs, and why there is no query planner.'
+---
+
+Cassandra's data model is the conceptual inverse of the relational model: instead of designing tables around entities and letting a query planner figure out how to serve any access pattern, you design each table around a single, specific query. The result is denormalized, duplicated data spread across multiple tables, where the application — not the database — owns the responsibility of keeping copies in sync. Once you internalize this inversion, almost every other Cassandra decision follows from it.
+
+## The Primary Key: Two Distinct Roles
+
+Every Cassandra table has a primary key composed of two logically separate parts.
+
+<CardGroup cols={2}>
+  <Card title="Partition Key" icon="circle-nodes">
+    Hashed by Murmur3 to produce a token. That token determines which node (and which replicas) own the row. All rows sharing the same partition key are stored together on one node — that co-location is what makes partition-scoped queries fast.
+  </Card>
+  <Card title="Clustering Key" icon="arrow-down-a-z">
+    Defines the sort order of rows *within* a partition. Enables efficient range queries and prefix scans inside one partition. Has no effect on which node is reached — only the partition key does that.
+  </Card>
+</CardGroup>
+
+<Note>
+  Only the partition key gets you to the right node. The clustering key is a sorted structure inside that node's storage. Range queries across different partition keys require touching every node — there is no index that spans them.
+</Note>
+
+The full CQL syntax makes the boundary explicit:
+
+```sql
+CREATE TABLE events_by_user (
+    user_id   uuid,
+    event_ts  timestamp,
+    event_id  uuid,
+    payload   text,
+    PRIMARY KEY ((user_id), event_ts, event_id)
+);
+```
+
+`user_id` is the partition key (parenthesized). `event_ts` and `event_id` are clustering keys that define row order within the `user_id` partition, enabling queries like "give me all events for user X after time T."
+
+## Query-First Modeling
+
+<Steps>
+  <Step title="Enumerate your access patterns first">
+    Before writing a single `CREATE TABLE`, list every query the application needs to serve: what it filters on, what it sorts by, and how much data it returns. These are the inputs to your schema, not the outputs.
+  </Step>
+  <Step title="Create one table per query pattern">
+    Each distinct access pattern gets its own table. If you need to look up events by user and also by session, you create two tables — `events_by_user` and `events_by_session` — with the same underlying data modeled differently.
+  </Step>
+  <Step title="Accept denormalization as the design">
+    The same row of logical data will appear in multiple physical tables. That is not a schema smell; it is the intended architecture. The application writes to all relevant tables on every mutation and accepts the operational complexity that comes with it.
+  </Step>
+  <Step title="Lock in your partition key choice">
+    Getting the partition key wrong is not fixable with an index or a query hint. It requires a data rewrite — reading all existing data and writing it into a new table with the corrected key. Treat partition key selection with the same weight you'd give a database migration.
+  </Step>
+</Steps>
+
+## Why There Is No Query Planner
+
+In a relational database, the query planner reads your SQL, examines statistics, and constructs an execution plan — you can filter on any column, join any tables, and the engine handles it. Cassandra has no such component.
+
+<Accordion title="The trade-off in full">
+  Cassandra's architecture is optimized for horizontal scale and high write throughput: any node can accept any write, there are no leaders, and the storage engine (LSM-tree) turns all writes into sequential appends. A general-purpose query planner would undermine this by requiring the coordinator to fan out to multiple nodes, merge partial results, and sort globally — operations that scale with cluster size and blow up at high cardinality.
+
+  Pushing modeling onto the application is the price of that write throughput. The application developer becomes the query planner: they choose, at schema-design time, exactly which data lives on which node in which order. At read time, the coordinator issues a targeted, single-partition fetch. No planning, no merging, near-constant latency regardless of cluster size.
+
+  What it costs: every new access pattern requires a new table and a migration. Ad-hoc analytics are essentially impossible without exporting data to a warehouse. Schema evolution is significantly more expensive than in a relational system.
+</Accordion>
+
+## CQL: SQL-Shaped, Not SQL
+
+Cassandra Query Language gives you familiar `SELECT`, `INSERT`, `UPDATE`, and `DELETE` syntax, but the semantics are strictly constrained.
+
+<Tabs>
+  <Tab title="What CQL supports">
+    ```sql
+    -- Exact partition key match (fast, single-node)
+    SELECT * FROM events_by_user
+    WHERE user_id = ? AND event_ts > ?;
+
+    -- Full primary key (fastest possible path)
+    SELECT * FROM events_by_user
+    WHERE user_id = ? AND event_ts = ? AND event_id = ?;
+    ```
+    Queries that specify the full partition key reach exactly one node. Clustering key predicates further narrow the in-partition scan using the SSTable sort order.
+  </Tab>
+  <Tab title="What CQL does not support">
+    ```sql
+    -- No joins — ever
+    SELECT u.name, e.payload
+    FROM users u JOIN events e ON u.id = e.user_id;
+
+    -- No filtering on non-key columns without ALLOW FILTERING
+    SELECT * FROM events_by_user WHERE payload = 'login';
+
+    -- No aggregations across partitions
+    SELECT COUNT(*) FROM events_by_user;
+    ```
+    Joins do not exist. Aggregations across partitions fan out to every node. Filtering on a non-key column with `ALLOW FILTERING` tells Cassandra to do a full cluster scan — it works in development and melts in production.
+  </Tab>
+</Tabs>
+
+## Denormalization and Application-Side Consistency
+
+Because you create one table per access pattern, the same logical record typically lives in several tables. A user profile change, for instance, might need to be written to `profiles_by_id`, `profiles_by_email`, and `profiles_by_username` atomically from the application's perspective.
+
+<Warning>
+  Cassandra's lightweight transactions (`IF NOT EXISTS`, `IF <condition>`) use Paxos and cost roughly four round trips. They are an escape hatch for specific compare-and-set needs, not a mechanism for maintaining cross-table consistency at scale. At high throughput, LWT contention becomes a bottleneck. Design your schema so that multi-table writes can tolerate brief inconsistency, or consolidate the data into a single partition.
+</Warning>
+
+The practical patterns for managing this:
+
+- **Batch writes** (`BEGIN BATCH ... APPLY BATCH`) — Cassandra logged batches are atomic per partition. They do *not* provide cross-partition transactions; they ensure either all writes are applied or none are, but only at the cost of coordinator-side overhead.
+- **Idempotent writes** — because Cassandra uses last-write-wins timestamps, re-issuing the same `INSERT` or `UPDATE` with the same data is safe. Design mutations to be idempotent so that retries on failure do not require compensation logic.
+
+## Secondary Indexes: Why They Are Often Not the Answer
+
+When you need a secondary lookup that your partition key doesn't support, reaching for a secondary index feels natural. In Cassandra, it usually isn't.
+
+<Accordion title="Local secondary indexes (2i) and their fan-out problem">
+  Legacy secondary indexes in Cassandra are **local per node**: each node indexes only the data it stores. A query against a secondary index that cannot be combined with a partition key predicate must be sent to every node in the cluster, collect results, and merge. For high-cardinality columns (unique email addresses, UUIDs), this is a full cluster scan dressed up as an index lookup.
+
+  The rule: secondary indexes work acceptably for low-cardinality columns (status codes, boolean flags, small enum values) where the fan-out is manageable. For high-cardinality lookups, the correct answer is a second table with the lookup column as the partition key.
+
+  Cassandra 5.0 introduces SAI (Storage-Attached Indexing) which improves on the legacy 2i implementation, but the fundamental scatter/gather behavior for cross-partition queries remains an architectural reality.
+</Accordion>
+
+## Common Anti-Patterns
+
+<CardGroup cols={2}>
+  <Card title="Hot Partition" icon="fire">
+    Using `user_id` as a partition key for an event table sounds natural until one user generates a disproportionate share of events. All traffic for that user routes to one node. No rebalancing can help — the partition key determines the node. Fix: add a bucket suffix (`user_id + bucket`) to spread the load, at the cost of query complexity.
+  </Card>
+  <Card title="Unbounded Partition Growth" icon="arrow-up-right">
+    A partition with an ever-growing number of clustering-key rows (a message thread, an append-only log) will eventually degrade read performance as the in-partition scan grows. Fix: embed a time bucket into the partition key so that older buckets are sealed and new data lands in fresh partitions.
+  </Card>
+  <Card title="ALLOW FILTERING" icon="magnifying-glass">
+    `ALLOW FILTERING` bypasses the partition-key routing and scans the entire cluster for matching rows. It is sometimes necessary in development for exploration. In production it is a latency and resource disaster. If you find yourself writing `ALLOW FILTERING`, the schema needs a new table, not a query hint.
+  </Card>
+  <Card title="Queue-Like Workloads" icon="list">
+    A pattern of write → read → delete is problematic because deletes in Cassandra are tombstone writes. A partition that has seen heavy deletion accumulates tombstones that must be scanned past on every read until compaction clears them. Cassandra is not a message queue; use Kafka for that pattern.
+  </Card>
+</CardGroup>
+
+## Evolution Question: Why Push Modeling to the Application?
+
+<Accordion title="Why is there no query planner — and what does that cost?">
+  The absence of a query planner is not an oversight; it is the load-bearing design decision that makes Cassandra's performance guarantees possible.
+
+  A query planner requires the database to understand the shape of your data, maintain statistics, and choose execution strategies at runtime. In a distributed system with thousands of partitions spread across dozens of nodes, a general-purpose planner would need to coordinate across nodes to evaluate filter predicates, sort results, and compute aggregates — the very operations that cause latency to grow with cluster size.
+
+  Cassandra's bet is that if you encode the query plan into the schema — by choosing partition and clustering keys that place exactly the data you need on exactly the node you'll read from — every query becomes a direct lookup with near-constant latency. The coordinator does not plan; it routes.
+
+  **What it costs:** Every new access pattern is a schema change. Analytics queries are impossible without a secondary system. The application layer absorbs the complexity that a query planner would otherwise hide, including consistency across multiple tables. Teams that try to use Cassandra like a relational database — adding secondary indexes and `ALLOW FILTERING` instead of designing tables per query — get the worst of both worlds: Cassandra's operational complexity without its performance.
+
+  The honest framing: Cassandra trades query flexibility for write throughput and horizontal scale. If you need flexible querying, you need a different tool, or you need to export your data to one.
+</Accordion>

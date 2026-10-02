@@ -1,0 +1,222 @@
+---
+title: 'MySQL Indexing and Query Execution Plans'
+sidebarTitle: 'Indexing & Queries'
+description: 'Learn B+ tree mechanics, covering index rules, key EXPLAIN fields, and when the MySQL optimizer picks the wrong plan — and how to override it with hints.'
+---
+
+Indexes are the primary lever for MySQL query performance. Adding the right index can reduce a full table scan to a handful of I/O operations; the wrong index design — or a subtle condition that silently bypasses an existing index — can make an index invisible to the optimizer. Understanding B+ tree mechanics, the rules that govern composite index usage, and how to read `EXPLAIN` output gives you the tools to diagnose plan problems and fix them at the right level rather than reaching for `FORCE INDEX` reflexively.
+
+## B+ Tree Index Mechanics
+
+Every InnoDB index is a B+ tree. The structure provides O(log n) point lookups, efficient range scans, and predictable page-level I/O cost. The key property that makes B+ trees the right choice for range-heavy workloads is that **all data lives in the leaf pages**, and leaf pages are linked in sorted order.
+
+```text
+          [10 | 30 | 50]          ← internal nodes (keys only)
+         /    |    |    \
+   [1-9]  [10-29]  [30-49]  [50-99]   ← leaf pages (data), linked in order
+                   ↔        ↔
+```
+
+A range scan like `WHERE id BETWEEN 30 AND 49` traverses the tree from root to the leaf containing 30, then follows the leaf-page linked list until it passes 49 — no further tree traversal needed. This leaf-chaining property is what hash indexes lack: a hash index maps keys to buckets and destroys the ordering relationship between them. You cannot range-scan a hash index.
+
+### Primary Key (Clustered Index)
+
+The primary key index IS the table. Leaf pages contain the full row data in PK order. PK lookups require a single B+ tree traversal. Range scans on the PK benefit from physical data locality on disk.
+
+### Secondary Indexes
+
+Secondary index leaf pages store the indexed column(s) and the **primary key value** — not a row pointer or physical address. A secondary-index lookup first traverses the secondary B+ tree to retrieve the PK, then traverses the clustered index to get the full row. This two-traversal pattern is why secondary index lookups on large tables are more expensive than they may appear.
+
+<Note>
+Because secondary indexes store the PK, a wide primary key (16-byte UUID) increases the size of every secondary index leaf page by that PK width. For a table with many secondary indexes, PK width compounds directly into total index storage and buffer pool pressure.
+</Note>
+
+## Types of Indexes
+
+<CardGroup cols={2}>
+  <Card title="Covering Index" icon="check-circle">
+    An index that includes all columns a query needs to return. The query can be fully satisfied from the index's leaf pages with no lookup into the clustered index. `EXPLAIN` shows `Using index` in the Extra column. Particularly valuable for large tables where avoiding the double traversal saves significant I/O.
+  </Card>
+  <Card title="Composite Index" icon="layer-group">
+    An index on multiple columns. Follows the leftmost prefix rule: the index is usable for queries that filter on the leading columns in order. The optimal column order for a composite index is equality predicates first, then range predicates, then sort columns.
+  </Card>
+  <Card title="Prefix Index" icon="text">
+    An index on the first N characters of a string column (`INDEX (email(20))`). Reduces index size but prevents covering-index use for queries that need the full column value, and the optimizer cannot calculate accurate cardinality estimates.
+  </Card>
+  <Card title="Functional / Generated Index" icon="function">
+    MySQL 8.0 supports indexes on generated columns or on expressions via functional indexes (`INDEX ((YEAR(created_at)))`). Allows index use for function-wrapped column references, which would otherwise silently disable the index.
+  </Card>
+</CardGroup>
+
+### The Leftmost Prefix Rule
+
+For a composite index `(a, b, c)`, the optimizer can use the index for:
+- Queries filtering on `a`
+- Queries filtering on `a, b`
+- Queries filtering on `a, b, c`
+
+It cannot use the index starting from `b` or `c` alone. Additionally, once a range predicate is applied to a column in the index, subsequent columns in the key cannot be used for filtering (only for the sort/covering benefit).
+
+```sql
+-- Index: (campaign_id, event_time, amount_micros)
+
+-- Uses all three columns: equality on campaign_id, range on event_time,
+-- covering on amount_micros (no lookup needed)
+SELECT amount_micros FROM spend_ledger
+WHERE campaign_id = 42 AND event_time >= '2024-01-01'
+ORDER BY event_time;
+
+-- Uses only campaign_id — the range on event_time stops index use for amount
+-- (still benefits from the range scan starting at campaign_id = 42)
+SELECT * FROM spend_ledger
+WHERE campaign_id = 42 AND event_time >= '2024-01-01';
+```
+
+## When Indexes Are Silently Not Used
+
+This is the category with the highest production impact. The optimizer will perform a full table scan without any warning when:
+
+<Accordion title="Function wrapped around the indexed column">
+```sql
+-- Index on created_at — NOT used (function wraps the column)
+SELECT * FROM orders WHERE YEAR(created_at) = 2024;
+
+-- Rewrite to use the index
+SELECT * FROM orders WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
+
+-- Or create a functional index (MySQL 8.0+)
+ALTER TABLE orders ADD INDEX idx_year ((YEAR(created_at)));
+```
+</Accordion>
+
+<Accordion title="Implicit type conversion">
+Type mismatch between the query predicate and the column type causes MySQL to apply a conversion function on every row — effectively wrapping the column in a function and disabling the index. This is silent and widespread.
+
+```sql
+-- Column type: VARCHAR(20), index on phone_number
+-- Comparing string column to integer: MySQL converts every row value to int
+SELECT * FROM users WHERE phone_number = 5551234567;  -- full scan, no warning
+
+-- Correct: match the column type
+SELECT * FROM users WHERE phone_number = '5551234567';  -- uses index
+```
+</Accordion>
+
+<Accordion title="Leading wildcard LIKE">
+```sql
+-- Index NOT used — leading wildcard requires scanning all values
+SELECT * FROM products WHERE name LIKE '%widget%';
+
+-- Index IS used — trailing wildcard is fine (prefix match)
+SELECT * FROM products WHERE name LIKE 'widget%';
+```
+For full-text search on arbitrary substrings, use a FULLTEXT index rather than a leading-wildcard LIKE.
+</Accordion>
+
+<Accordion title="Low cardinality columns">
+If a column has very few distinct values (e.g., `status` with values 'active'/'inactive'), the optimizer's cardinality estimate may conclude that reading the index and then fetching each row individually costs more than a full table scan. The optimizer is often right about this — an index on a boolean column on a table where 90% of rows are 'active' is usually not useful for `WHERE status = 'active'`. Composite indexes where the first column is high-cardinality can still help.
+</Accordion>
+
+## Reading EXPLAIN Output
+
+`EXPLAIN` shows the optimizer's chosen execution plan. The columns to read first:
+
+| Column | What to look for |
+|---|---|
+| `type` | The join/access type — see below |
+| `key` | Which index is being used (`NULL` means no index) |
+| `rows` | Estimated number of rows examined — multiply across join levels |
+| `filtered` | Estimated percentage of rows that pass the WHERE condition after the index scan |
+| `Extra` | Additional flags — `Using index`, `Using filesort`, `Using temporary` |
+
+**`type` values in order of performance (best to worst):**
+
+```text
+system → const → eq_ref → ref → range → index → ALL
+```
+
+- `const` / `eq_ref`: single-row access via unique index — essentially free
+- `ref`: index lookup returning a small set of rows — good
+- `range`: index range scan — acceptable, check `rows` estimate
+- `index`: full index scan (reads all leaf pages in order) — often a smell
+- `ALL`: full table scan — usually the problem
+
+**Key `Extra` flags:**
+
+- `Using index` — covering index; no lookup into clustered index needed ✓
+- `Using index condition` — index condition pushdown; filter applied inside the storage engine ✓
+- `Using filesort` — results sorted in memory or on disk (no index available for ORDER BY) ✗
+- `Using temporary` — intermediate result materialized into a temp table (complex GROUP BY, DISTINCT) ✗
+
+### EXPLAIN Example: With and Without a Covering Index
+
+```sql
+-- Table: spend_ledger(event_time, event_id, campaign_id, amount_micros)
+-- Query: total spend for campaign 42 over a date range
+
+-- Without covering index:
+EXPLAIN SELECT SUM(amount_micros)
+FROM spend_ledger
+WHERE campaign_id = 42 AND event_time >= '2024-06-01';
+-- type: ref, key: idx_campaign(campaign_id), rows: ~50000
+-- Extra: Using index condition    ← still needs to fetch amount_micros from clustered index
+
+-- After adding covering index (campaign_id, event_time, amount_micros):
+EXPLAIN SELECT SUM(amount_micros)
+FROM spend_ledger
+WHERE campaign_id = 42 AND event_time >= '2024-06-01';
+-- type: range, key: idx_campaign_covering, rows: ~50000
+-- Extra: Using index    ← entire query served from index leaf pages, no heap lookup
+```
+
+`EXPLAIN ANALYZE` (MySQL 8.0+) runs the query and returns actual row counts alongside estimates — the best way to identify when the optimizer's cardinality estimates are badly wrong.
+
+## The Query Optimizer
+
+The MySQL optimizer is cost-based: it estimates the cost of candidate execution plans using index statistics (cardinality, key distribution) and chooses the plan with the lowest estimated cost. Histograms, introduced in MySQL 8.0, give the optimizer better statistics for non-indexed columns.
+
+**When the optimizer picks the wrong plan:**
+
+- **Stale statistics.** `ANALYZE TABLE` forces a statistics update on a table. On very large tables, statistics sampling may underestimate or overestimate cardinality. If `EXPLAIN` shows a wildly wrong `rows` estimate, run `ANALYZE TABLE` and check again.
+- **Small table joined to large table.** The optimizer may choose the wrong join order if statistics are off. `STRAIGHT_JOIN` forces the specified join order as a diagnostic tool.
+- **Multiple candidate indexes.** With several indexes that could serve a query, the cost estimates for each may be close, and the optimizer may pick the suboptimal one.
+
+<Tip>
+`USE INDEX (idx_name)` tells the optimizer to consider only the specified index (it can still choose a table scan if it estimates that's cheaper). `FORCE INDEX (idx_name)` forces the optimizer to use the specified index and prefer it over a table scan. Use `FORCE INDEX` as a last resort when you have confirmed the optimizer is wrong — not as a first response to a slow query. Optimizer hints (`/*+ INDEX(t idx_name) */`) are the modern alternative in MySQL 8.0 and more maintainable than `FORCE INDEX` in query text.
+</Tip>
+
+## Joins
+
+MySQL supports three join algorithms:
+
+- **Nested-loop join (NLJ):** for each row in the outer table, probe the inner table's index. Efficient when the inner table has a good index on the join column.
+- **Block nested-loop join (BNL):** buffers outer table rows in a join buffer, then scans the inner table once per buffer batch rather than once per outer row. Used when the inner table has no useful index.
+- **Hash join (MySQL 8.0.18+):** builds a hash table from the smaller side, probes with the larger side. Efficient for large equi-joins with no useful index. There is no merge join in MySQL.
+
+## Deep Pagination
+
+`LIMIT 1000000, 20` is a common anti-pattern. MySQL must scan and discard the first 1,000,000 matching rows before returning the 20 you want — the query is O(offset), not O(page size). At offset 1,000,000 on a table with no index path that permits a skip, MySQL is doing significant work.
+
+**The fix is keyset (seek) pagination:**
+
+```sql
+-- Instead of:
+SELECT * FROM orders ORDER BY created_at LIMIT 1000000, 20;
+
+-- Use keyset pagination: remember the last seen value, seek to it
+SELECT * FROM orders
+WHERE created_at > '2024-03-15 14:22:33'  -- last value from previous page
+ORDER BY created_at
+LIMIT 20;
+-- type: range — scans only the 20 rows needed, regardless of page depth
+```
+
+Keyset pagination requires a stable sort key (or composite key for ties) but is the only approach that remains O(1) in page depth for large tables.
+
+## Evolution Questions
+
+<Accordion title="Why B+ trees over binary trees or hash indexes for range scans?">
+Binary search trees (BSTs) provide O(log n) point lookups but offer no locality guarantee — logically adjacent keys may be physically scattered across memory or disk. They also become unbalanced with real-world insert patterns, degrading to O(n) in pathological cases. B+ trees solve both problems: they maintain balance through splits and merges, and all data lives in leaf pages linked in sorted key order.
+
+Hash indexes provide O(1) point lookups but hash functions explicitly destroy ordering. Adjacent hash values bear no relationship to adjacent key values. A hash index cannot answer `WHERE id BETWEEN 100 AND 200` without scanning every hash bucket. For a storage engine built around range queries, JOIN operations, and ORDER BY, the B+ tree's ordered-leaf property is decisive.
+</Accordion>

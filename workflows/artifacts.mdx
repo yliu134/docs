@@ -1,0 +1,119 @@
+---
+title: 'Producing Weekly Artifacts That Actually Count'
+sidebarTitle: 'Artifacts'
+description: 'Learn what qualifies as a weekly artifact — transformed, not transcribed — strong vs weak examples, the five-line case study bar, and ideas by topic month.'
+---
+
+One artifact per week is the framework's primary forcing function for synthesis. Reading builds familiarity; producing an artifact forces you to confront what you actually understand versus what you only recognize. The Sunday review's Q1 is the only ledger for artifacts — there is no separate tracking table. If you can name a specific output in Q1, it counts. If you can't, the week was reading, not synthesis.
+
+## The Quality Bar
+
+**Transformed, not transcribed.** This is the single criterion. Apply it before you call something an artifact.
+
+<Tabs>
+  <Tab title="Does NOT count">
+    These are notes, not artifacts. They're valuable inputs to synthesis, but they are not the artifact itself.
+
+    - A chapter summary that restates the source's structure
+    - A highlighted paper with margin annotations
+    - A restatement of a mechanism in your own words without adding analysis
+    - A list of facts you plan to remember
+    - A diagram copied from the source with labels renamed
+
+    If someone who read the same source could have written it, it's transcription.
+  </Tab>
+  <Tab title="DOES count">
+    These all qualify because they contain something the source didn't:
+
+    - **Synthesis across sources** — a comparison of two designs that neither source makes explicitly (e.g., InnoDB vs Cassandra for the same workload)
+    - **Design answer the source didn't contain** — a written design with stated requirements, trade-offs, and failure modes, derived from but not present in the reading
+    - **Adversarial AI exchange writeup** — a structured exchange that exposed a gap in your understanding, written up with the gap named and resolved
+    - **System design with explicit trade-offs** — not "I would use Redis" but "I would use Redis because X, at the cost of Y, and I'd know it was wrong if Z"
+    - **Tier notes written from memory to the depth bar** — closed-book reconstruction of a mechanism to the bar (mechanism + trade-off), not a restatement of the source paragraph by paragraph
+  </Tab>
+</Tabs>
+
+<Note>
+  Adversarial AI exchanges that genuinely expose gaps count as artifacts. The bar is that you named a thing you'd have gotten wrong and wrote down why. A comfortable conversation where the AI confirms your existing understanding does not count.
+</Note>
+
+## The Five-Line Case Study Bar
+
+Every case study ends with this reduction. It replaces open-ended note-taking as the forcing function for understanding a real system's design.
+
+```
+Problem:    what they were actually solving
+Constraint: the requirement that forced the design
+Trade:      what they gave up, explicitly
+My miss:    what I'd have gotten wrong
+Rule:       the transferable one-liner
+```
+
+The **"My miss"** line is the one that does the work. It's the only line you can't write from skimming. If you can't write a specific "My miss" — not "I would have under-appreciated caching" but "I would have added a replica for read scale before solving the stampede problem with leases" — the case study isn't reduced to the bar yet.
+
+**Example** — Scaling Memcache at Facebook (NSDI 2013):
+
+```
+Problem:    Serve billions of reads/sec from a social graph with
+            extreme read-to-write skew.
+
+Constraint: Cache and storage must stay consistent after writes
+            — stale reads at this scale cause visible product bugs.
+
+Trade:      Leases add a round trip on cache misses during
+            invalidation windows; accepted in exchange for
+            eliminating thundering-herd stampedes.
+
+My miss:    I would have solved read scale with more replicas
+            before realizing the stampede problem kills you first.
+            Leases solve a correctness problem, not a capacity one.
+
+Rule:       Invalidation-driven consistency (via binlog) + leases
+            for stampede prevention is the pattern; replica count
+            is secondary.
+```
+
+<Tip>
+  Paste the "My miss" line into your Sunday review's Q1 alongside the case study name. The review is the ledger — an unreduced case study doesn't count as a shipped artifact.
+</Tip>
+
+## Artifact Ideas by Month
+
+These are concrete starting points, not requirements. Pick the one that most directly addresses your current weakest story from Q5 of the Sunday review.
+
+<Accordion title="Month 1–2 · Databases">
+  - **Toy B+ tree with writeup** — implement insert, delete, and range scan; write up what surprised you about node splits or the fanout trade-off. The writeup is the artifact, not the code.
+  - **Query-plan gotcha with `EXPLAIN ANALYZE`** — find or construct a query where the optimizer picks the wrong plan; document the plan, the fix, and why the optimizer was fooled.
+  - **Gap-lock deadlock walkthrough** — reproduce a gap-lock deadlock under `REPEATABLE READ` end to end; walk through what InnoDB actually did on each side and what the resolution was.
+  - **Vitess vs MySQL comparison** — design doc modeling one workload on vanilla MySQL and on Vitess, with the trade-offs made explicit: where distributed transactions disappear, what data locality decisions replaced them, and what you can no longer do.
+</Accordion>
+
+<Accordion title="Month 3 · Caching">
+  - **Token-bucket rate limiter in Redis (Lua)** — implement it; document why Lua, what atomicity guarantee it provides, and what it can't protect against.
+  - **Cache stampede simulation** — trigger a stampede with load generation against a cold cache; show the before/after with a mitigation (leases, probabilistic refresh, or background revalidation); name the trade each mitigation makes.
+  - **Cache-aside vs write-through comparison** — write a design answer for one concrete workload using each pattern; name the scenario where each fails and the signal you'd watch in production.
+</Accordion>
+
+<Accordion title="Month 4 · Messaging + Distributed Systems">
+  - **Toy Raft leader election** — implement leader election only (~500 lines); document the invariant you found hardest to maintain and where your first attempt broke.
+  - **Event-driven service with chaos injection** — build a minimal producer/consumer; inject failures (kill broker, drop network partition, duplicate delivery); document what broke and what held.
+  - **"What exactly-once really means in Kafka" writeup** — explain why "exactly-once" is technically a misnomer at the end-to-end level; include a working failure scenario where the semantic breaks outside Kafka's boundary.
+</Accordion>
+
+<Accordion title="Month 5 · Reliability + Observability">
+  - **OTEL-instrumented service + dashboard** — instrument one prior artifact end to end with OpenTelemetry; show spans, a p99 metric, and at least one structured log field on a live dashboard.
+  - **Synthetic postmortem** — cause a deliberate incident on your Track B project; write the postmortem in standard format (timeline, contributing factors, detection, resolution, action items). The postmortem is the artifact, not the incident.
+</Accordion>
+
+## What to Do With Artifacts
+
+Artifacts are written for consolidation and interview rehearsal — not for an audience.
+
+<Warning>
+  Publishing artifacts publicly is a deliberate non-goal of this framework. Screens come from referrals; public artifacts help win interviews you'd get anyway and do little to help you pass them. Write for clarity and depth, not for an imagined reader.
+</Warning>
+
+Once you have an artifact, use it in two ways:
+
+1. **Consolidation** — return to it the following week and re-read your own "My miss" line. Does it still hold? Did the next week's reading change the analysis? Update it if it did.
+2. **Interview rehearsal** — practice narrating the artifact aloud in under two minutes: problem, what you built, the trade-off you made, what you'd do differently. This is the standing monthly agenda item for your mentor 1:1.

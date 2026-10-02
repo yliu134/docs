@@ -1,0 +1,172 @@
+---
+title: 'Cassandra LSM-Tree Storage Engine and Failure Modes'
+sidebarTitle: 'Storage Engine'
+description: 'Cassandra LSM internals, SSTable compaction strategies, tombstone hazards, B-tree vs LSM tradeoffs, and why DynamoDB chose Paxos over leaderless quorums.'
+---
+
+Cassandra uses an LSM-tree (Log-Structured Merge-tree) storage engine, making it fundamentally write-optimized — the inverse of InnoDB's B-tree design. Every architectural decision downstream of that choice, from how deletes work to why compaction is mandatory, flows from the LSM commitment. Understanding the LSM-versus-B-tree trade-off tells you which workload each engine was built to serve, and why choosing the wrong engine for your workload produces failures that are difficult to recover from without a data migration.
+
+## The LSM Write Path
+
+<Steps>
+  <Step title="Commitlog: durability first">
+    Every write is appended to the **commitlog** — a sequential, append-only file on disk — before touching any in-memory structure. The commitlog is the durability guarantee: if the node crashes before the data reaches a stable SSTable, the commitlog allows full recovery on restart. Because it is append-only, it is written sequentially and is extremely fast.
+  </Step>
+  <Step title="Memtable: in-memory sorted structure">
+    After the commitlog write, data is inserted into the **memtable** — an in-memory, sorted data structure. The memtable accumulates writes and serves as the primary read target for recently written data. Multiple writes to the same cell are collapsed in the memtable via timestamp ordering.
+  </Step>
+  <Step title="Flush: memtable → SSTable">
+    When the memtable reaches a size threshold (or a commitlog segment fills), it is flushed to disk as an **SSTable** (Sorted String Table). SSTables are immutable once written: they are never modified in place. The corresponding commitlog segment is then discarded. This immutability is what allows sequential writes — no random I/O for updates or deletes.
+  </Step>
+  <Step title="Compaction: merging SSTables">
+    Over time, many SSTables accumulate on disk. Reads must check multiple SSTables for any given partition key. **Compaction** merges SSTables, resolves conflicts by keeping the highest-timestamp cell values, and permanently removes tombstones whose `gc_grace_seconds` window has passed. Compaction is the LSM engine's ongoing maintenance cost.
+  </Step>
+</Steps>
+
+## The LSM Read Path
+
+Reads in an LSM engine are more complex than writes because the data for any partition might span a memtable and several SSTables.
+
+```text
+Read request for partition key K
+  │
+  ├─ 1. Check memtable (most recent writes)
+  │
+  ├─ 2. For each SSTable on disk (newest to oldest):
+  │     ├─ Check Bloom filter → "definitely not here" → skip
+  │     ├─ Check partition index / summary → locate offset in data file
+  │     └─ Read and merge cell values, keeping highest timestamp per cell
+  │
+  └─ 3. Return merged result
+```
+
+<CardGroup cols={2}>
+  <Card title="Bloom Filters" icon="filter">
+    Each SSTable has a probabilistic Bloom filter that can answer "this partition key is definitely not in this SSTable" with no false negatives. They eliminate disk seeks for SSTable misses at the cost of memory. The `bloom_filter_fp_chance` setting controls the false-positive rate — lower rates require more memory but reduce unnecessary disk reads.
+  </Card>
+  <Card title="Key Cache and Chunk Cache" icon="memory">
+    The key cache stores the offset of partition keys within SSTable data files, eliminating the index lookup step on cache hit. The chunk cache buffers raw SSTable data. Row cache (caching full reconstructed rows) is generally avoided in production because it must be invalidated on any write to the row and does not handle tombstones well.
+  </Card>
+</CardGroup>
+
+## Compaction Strategies
+
+The compaction strategy you choose is one of the most consequential per-table configuration decisions. There is no universal best choice — it depends on the workload's read-to-write ratio and data access pattern.
+
+<Tabs>
+  <Tab title="STCS (Size-Tiered)">
+    **Size-Tiered Compaction Strategy** — the default. Cassandra accumulates SSTables of similar size and merges them when enough accumulate at the same tier.
+
+    - **Write-optimized**: produces fewer write amplification effects because SSTables are compacted less frequently.
+    - **Space amplification**: multiple generations of the same data exist simultaneously on disk during compaction. Space usage can temporarily spike to 2x.
+    - **Read degradation**: over time, many SSTables accumulate before a compaction trigger, increasing the number of files a read must check.
+    - **Best for**: write-heavy workloads where reads are relatively infrequent, or workloads with high data churn.
+  </Tab>
+  <Tab title="LCS (Leveled)">
+    **Leveled Compaction Strategy** — organizes SSTables into levels of exponentially increasing size. Each level (except L0) contains non-overlapping SSTables. A compaction merges one L0 SSTable into L1, one L1 into L2, and so on.
+
+    - **Read-optimized**: because SSTables at each level are non-overlapping, a read needs to check at most one SSTable per level — typically two checks total.
+    - **Higher write amplification**: data is rewritten many more times as it moves through levels.
+    - **Predictable space usage**: space amplification is bounded to ~10x the size of the last level.
+    - **Best for**: read-heavy workloads, or tables where predictable read latency matters more than write throughput.
+  </Tab>
+  <Tab title="TWCS (Time-Window)">
+    **Time-Window Compaction Strategy** — designed for time-series data with TTL. Compacts SSTables within the same time window together and leaves older, closed windows untouched.
+
+    - **Avoids re-compacting old data**: once a time window is closed, its SSTables are never merged again. This prevents the ongoing compaction cost from growing with data age.
+    - **TTL-aligned**: works best when all data in a partition has a consistent TTL, so entire windows expire and are dropped together.
+    - **Anti-pattern warning**: do not use TWCS without TTLs on the data. Without expiry, closed windows grow forever and are never compacted.
+    - **Best for**: append-only time-series tables, IoT sensor data, or any workload with a rolling retention window.
+  </Tab>
+  <Tab title="UCS (Unified, 5.0)">
+    **Unified Compaction Strategy** — introduced in Cassandra 5.0. A single parameterized strategy that spans the design space of the above three by adjusting a scaling factor. The intent is to allow workload-appropriate compaction without needing to switch between fundamentally different strategies as access patterns shift.
+  </Tab>
+</Tabs>
+
+## B-Tree vs LSM: InnoDB and Cassandra as the Two Canonical Choices
+
+<CardGroup cols={2}>
+  <Card title="InnoDB (B-Tree)" icon="database">
+    **Write path**: random writes to the buffer pool (B-tree page modifications). The redo log provides crash durability, but writes ultimately require maintaining sorted B-tree pages with potential page splits.
+
+    **Read path**: O(log N) traversal down the B-tree to the leaf page. Very fast for point lookups and range scans once data is on the right page.
+
+    **Space amplification**: low — each row exists in exactly one place (the clustered index leaf).
+
+    **Compaction**: none. The B-tree is maintained in-place via page splits and merges.
+
+    **Best for**: mixed read-write workloads, OLTP with complex queries, point lookups, range scans with variable access patterns.
+  </Card>
+  <Card title="Cassandra (LSM)" icon="layer-group">
+    **Write path**: sequential appends to memtable and commitlog. No random I/O. Write throughput scales with sequential disk bandwidth, not seek time.
+
+    **Read path**: must check memtable + multiple SSTables. Bloom filters reduce disk seeks, but worst-case reads touch many files before compaction.
+
+    **Space amplification**: higher — multiple SSTables can contain versions of the same data before compaction merges them.
+
+    **Compaction**: mandatory ongoing background process. Falling behind on compaction degrades read performance and inflates disk usage.
+
+    **Best for**: write-heavy workloads, append-heavy time-series data, horizontal scale requirements, workloads where the access pattern is known and fixed at schema design time.
+  </Card>
+</CardGroup>
+
+<Note>
+  The one-sentence rule: use InnoDB (B-tree) when your workload is read-heavy or requires flexible queries; use Cassandra (LSM) when your workload is write-heavy and your access patterns are known and fixed. The LSM advantage disappears as the read-to-write ratio increases, because read amplification (checking multiple SSTables) consumes the headroom the fast writes created.
+</Note>
+
+## Failure Modes
+
+<Accordion title="Coordinator failure during a write">
+  If the coordinator crashes after forwarding a write to replicas but before receiving acknowledgements, the write may or may not have been applied on each replica independently. On client retry, a new coordinator picks up the request. If the write is idempotent (same timestamp, same value), re-application is harmless — all replicas converge to the same state via LWW. If the client generates a new timestamp on retry, the retry becomes a new, later write that will win via LWW. This is usually correct behavior but can surprise code that assumes exactly-once write semantics.
+</Accordion>
+
+<Accordion title="Replica failure during a write">
+  With RF=3 and QUORUM writes (W=2), a write succeeds after two of three replicas acknowledge. The third replica missed the write. Hinted handoff covers this if the replica recovers within `max_hint_window`. If the replica is down longer, the hint expires and the replica diverges silently until `nodetool repair` reconciles it. A subsequent QUORUM read that routes to the stale replica and one up-to-date replica will return the correct value via LWW timestamp resolution — but the stale replica is not immediately corrected unless read repair fires.
+</Accordion>
+
+<Accordion title="Split-brain in multi-datacenter deployments">
+  If network partitioning isolates one datacenter from another, each DC continues to accept writes with `LOCAL_QUORUM`. Both DCs write to locally-agreed values that diverge from each other. When the partition heals, the two sides have conflicting values for the same cells. Cassandra resolves this via LWW: the write with the higher timestamp wins. If both DCs wrote to the same cell during the partition, one write is silently discarded — no error, no conflict notification, no merge. This is a known and accepted trade-off of the LWW design. Applications that cannot tolerate this must use `EACH_QUORUM` (requires acknowledgement from both DCs on every write) or avoid writes to the same cells from multiple DCs simultaneously.
+</Accordion>
+
+## Why Amazon Abandoned Dynamo's Design for DynamoDB
+
+<Accordion title="From leaderless quorums to per-partition Paxos leaders (~200 words)">
+  The 2007 Dynamo paper described a leaderless system with sloppy quorums, hinted handoff, and vector clocks with application-side reconciliation. It was a research prototype that demonstrated high availability under failure. Amazon built the initial DynamoDB in 2012 and, as described in the 2022 USENIX ATC paper on DynamoDB's architecture, the production system diverged substantially from its paper ancestor.
+
+  The core change: each replication group (a partition replicated across three availability zones) is governed by a **Multi-Paxos leader**. The leader serializes all writes and serves strongly consistent reads directly — no quorum coordination, no vector clocks, no application-side merge. Clients can opt into strong consistency (`ConsistentRead=true`) and get it as a first-class primitive.
+
+  Why abandon the leaderless design? Three reasons from the paper's rationale stand out. First, eventual consistency with reconciliation pushed real complexity onto every application developer — the shopping-cart merge was a clever example, but most teams couldn't implement merge logic correctly under all failure scenarios. Second, predictable p99 latency mattered more to customers than theoretical availability under rare multi-node failures; Paxos leaders with adaptive capacity provided more predictable tail latency than sloppy quorums. Third, as a fully managed service, Amazon absorbed the operational burden (repair, compaction, topology management) and chose the architecture they could operate reliably at scale, not the one that was easiest to describe in a paper.
+
+  The result: DynamoDB is safer to use by default (strongly consistent by default since 2021), less operationally demanding for users, but it reintroduces a coordination point that the original Dynamo deliberately removed. Global Tables — DynamoDB's multi-region active-active feature — does land back on LWW for cross-region conflict resolution, the one place where Cassandra's simpler design proved necessary at truly global scale.
+</Accordion>
+
+## Cassandra vs DynamoDB: Where They Actually Differ
+
+| Dimension | Cassandra | DynamoDB |
+|---|---|---|
+| Coordination model | Leaderless, tunable quorum | Paxos leader per partition |
+| Conflict resolution | LWW on cell timestamps | Leader-ordered writes |
+| Strong reads | `R + W > RF` at QUORUM | `ConsistentRead=true` |
+| Operations burden | Yours (repair, compaction, topology) | Amazon's |
+| Cost model | Hardware + engineering time | RCU/WCU + storage pricing |
+| Hot partition mitigation | Manual (key design, bucketing) | Adaptive capacity, burst |
+
+## Evolution Questions
+
+<Accordion title="Why did Cassandra drop vector clocks for LWW — and what does that cost?">
+  The Dynamo paper used vector clocks to track causal history across replicas: each replica maintained a version vector, and when divergent versions were detected on read, the application received all conflicting versions and was responsible for merging them. The shopping-cart use case in the paper — adding two items from two simultaneous sessions — is the canonical example where this semantic richness matters.
+
+  Cassandra replaced this with last-write-wins on cell-level microsecond timestamps. What it bought: radical simplicity. No version vectors to maintain, no reconciliation API, no application code required to handle conflicts. Every cell has one value at any moment: the one with the highest timestamp. The data model is easier to reason about, and the storage format is simpler.
+
+  What it cost: correctness under concurrent writes and clock skew. Two writes to the same cell from two different nodes, arriving within the same microsecond window or with clocks that drift, will have one silently discarded with no application notification. There is no way to recover the losing write. In the Dynamo model, both writes are preserved until the application merges them — the data is never lost, only temporarily branched.
+
+  The honest framing: the Cassandra team accepted a data-loss hazard in exchange for operational and implementation simplicity. Whether that trade is correct depends on your workload. For most high-write-throughput use cases where concurrent writes to the same cell are rare, LWW is fine. For systems where concurrent updates to the same record from multiple sources are common and none can be silently dropped, LWW is the wrong conflict resolution model — and Cassandra may be the wrong database.
+</Accordion>
+
+<Accordion title="Why are deletes tombstones — what does the LSM engine make expensive that this avoids?">
+  In a B-tree engine like InnoDB, a delete marks a row as deleted in the leaf page or removes it immediately. The page is mutable; the modification is in-place. For an LSM engine, in-place modification is architecturally excluded: SSTables are immutable once written. Modifying an existing SSTable to remove a key would require reading the entire file, applying the deletion, and writing a new file — destroying the sequential-write advantage that makes the LSM design fast.
+
+  Tombstones are the LSM-compatible solution: a delete becomes a write, appended to the current memtable and eventually flushed to a new SSTable as a tombstone marker. The original data in older SSTables is left in place. Compaction, which must merge SSTables anyway, is the natural point to discard both the tombstone and the original value it supersedes — once `gc_grace_seconds` has elapsed to ensure no replica can resurrect the deleted data.
+
+  The cost is deferred: you pay for the delete not at write time (cheap) but at compaction time (amortized, background) and at read time (tombstone scanning overhead until compaction clears them). This is the correct trade for write-heavy workloads where the cost of immediate deletion would appear on every write. It is the wrong trade for queue-like workloads where deletes are as frequent as writes, because tombstone accumulation becomes a read-path tax.
+</Accordion>

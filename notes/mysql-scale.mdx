@@ -1,0 +1,300 @@
+---
+title: 'MySQL at Scale: Schema Changes, Partitioning, Observability'
+sidebarTitle: 'Scale & Ops'
+description: 'Manage schema changes with gh-ost, navigate partitioning trade-offs, observe InnoDB via performance_schema, and analyze the write-heavy budget ledger case.'
+---
+
+Operating MySQL at scale means managing schema evolution without downtime, making informed choices about partitioning, and observing what is actually happening inside the engine rather than guessing from application metrics. The challenges are interconnected: a schema change on a hot table triggers the same metadata lock dynamics that cause lock contention elsewhere; partitioning decisions interact with the query patterns and the unique-key constraints that govern idempotency; and observability tools surface the undo log growth and buffer pool eviction that explain otherwise mysterious latency degradation. This page ties those threads together through a concrete adversarial scenario.
+
+## Online Schema Changes
+
+`ALTER TABLE` in MySQL acquires a **metadata lock (MDL)** — and depending on the algorithm and the operation, may acquire it exclusively for the duration of the change. On a table with millions of rows, even an `ALGORITHM=INPLACE` ALTER can block all read and write traffic at the moment it needs to swap in the new table structure. On a write-saturated table, that MDL acquisition may queue for a very long time while in-flight queries hold shared MDLs.
+
+<Accordion title="MySQL ALTER TABLE Algorithms">
+
+MySQL offers three algorithms, specified as `ALTER TABLE t ADD COLUMN c INT, ALGORITHM=INPLACE`:
+
+- **ALGORITHM=INSTANT** (MySQL 8.0): modifies only table metadata. Returns immediately with no data copy and no lock. Limited to operations like adding a column at the end, changing column defaults. The best outcome when the operation supports it.
+
+- **ALGORITHM=INPLACE**: modifies the table structure while it remains online for reads and writes. Requires a brief exclusive MDL at the start and end but not for the duration of the copy. Many operations (add index, change column length) use this.
+
+- **ALGORITHM=COPY**: creates a new table with the target structure, copies all data row by row, and swaps the tables. Holds a shared MDL for reads but blocks writes for the entire duration. This is the fallback for operations that cannot be done in-place.
+
+The problem is the brief exclusive MDL even in the INPLACE case. On a busy table, "brief" can mean queuing for minutes if existing transactions are slow to release their shared MDLs.
+</Accordion>
+
+### pt-online-schema-change and gh-ost
+
+Both tools implement the **shadow table pattern** to avoid the MDL hazard:
+
+<Steps>
+  <Step title="Create shadow table">
+    Create a new table (`_tablename_new`) with the target schema. No lock is held on the original table.
+  </Step>
+  <Step title="Copy existing rows">
+    Copy rows from the original table to the shadow table in small batches. The original table remains fully online for reads and writes throughout.
+  </Step>
+  <Step title="Sync concurrent changes">
+    **pt-osc** uses triggers on the original table to capture inserts, updates, and deletes and apply them to the shadow table in real time.
+
+    **gh-ost** tails the MySQL binlog directly rather than using triggers, reading row changes from the replication stream and applying them to the shadow table. This avoids the overhead and contention triggers introduce on write-heavy tables.
+  </Step>
+  <Step title="Atomic cutover">
+    Once the shadow table is caught up, perform a brief atomic swap — typically a `RENAME TABLE` — to make the shadow table the new primary table. The exclusive MDL is held only for this instant.
+  </Step>
+</Steps>
+
+<Warning>
+Even gh-ost and pt-osc require a brief exclusive MDL at cutover. On a write-saturated table, this moment must be scheduled carefully — typically during a low-traffic window — because the cutover still queues new queries behind it for the duration of the rename.
+</Warning>
+
+## Native Partitioning
+
+MySQL native partitioning divides a table's data into multiple physical partitions within a single MySQL instance. All partitions share the same server's CPU, memory, buffer pool, redo log machinery, and failure boundary. **Partitioning is not sharding**: it does not distribute load across multiple machines.
+
+### Partition Types
+
+<CardGroup cols={2}>
+  <Card title="RANGE / RANGE COLUMNS" icon="calendar">
+    Rows are assigned to partitions based on a value falling within a defined range. The most common use is time-based partitioning — one partition per day, week, or month. Enables efficient retention management: `DROP PARTITION` completes in milliseconds with no undo log overhead, compared to a `DELETE` on tens of millions of rows.
+  </Card>
+  <Card title="LIST / LIST COLUMNS" icon="list">
+    Rows are assigned to partitions based on matching a defined set of values. Useful for geography (partition by region) or tenant class (partition by account tier). Requires knowing the enumeration of values in advance.
+  </Card>
+  <Card title="HASH" icon="hashtag">
+    Rows distributed across a fixed number of partitions by computing a hash of the partition expression. Even distribution by construction. Cannot be used for partition pruning on range predicates.
+  </Card>
+  <Card title="KEY" icon="key">
+    Like HASH but MySQL handles the hashing using its own internal function. Can use multiple columns including non-integer types.
+  </Card>
+</CardGroup>
+
+### Partition Pruning
+
+When a query includes a predicate on the partition column, MySQL's optimizer eliminates partitions that cannot contain matching rows — reading only the relevant partitions. This is the primary query-performance benefit of partitioning on a time column:
+
+```sql
+-- Table partitioned by RANGE on event_time, one partition per day
+
+-- Without pruning (no partition key in WHERE):
+SELECT COUNT(*) FROM spend_ledger WHERE campaign_id = 42;
+-- Scans all partitions
+
+-- With pruning (partition key in WHERE):
+SELECT COUNT(*) FROM spend_ledger
+WHERE event_time >= '2024-06-01' AND event_time < '2024-07-01'
+  AND campaign_id = 42;
+-- Scans only the June partition
+```
+
+### The Partition Key Constraint
+
+<Warning>
+**Every unique key in a partitioned table must contain the partition column.** This is a hard MySQL requirement, not a performance recommendation. It means you cannot have a simple `UNIQUE KEY (event_id)` on a table partitioned by `event_time` — the unique key must be `UNIQUE KEY (event_id, event_time)`.
+
+This constraint has real correctness implications. Idempotency logic that relies on `event_id` being unique must carry the original `event_time` through retries. A retry that stamps `NOW()` instead of the original event time produces a different `(event_id, event_time)` pair — which the unique index cannot detect as a duplicate. The result is a double-count that is invisible at the MySQL level and only surfaces in reconciliation.
+</Warning>
+
+### When Partitioning Helps vs. Hurts
+
+| Use case | Outcome |
+|---|---|
+| Time-series retention (`DROP PARTITION` for old data) | ✓ Strong win |
+| Partition pruning for time-range queries | ✓ Genuine benefit |
+| Reducing write load by distributing across partitions | ✗ Partitions share one instance's I/O — no write distribution |
+| Replacing sharding | ✗ Different problem; partitions share CPU, RAM, and failure boundary |
+| Tables with foreign key constraints | ✗ Foreign keys are not supported on partitioned tables |
+| Tables with full-text indexes | ✗ Full-text indexes are not supported on partitioned tables |
+
+The summary: partitioning buys **retention** and **pruning**. It does not buy write distribution or capacity scaling — those require sharding across multiple instances.
+
+## Observability
+
+### performance_schema
+
+`performance_schema` is MySQL's built-in instrumentation layer. It collects per-event timing data with low overhead and is the authoritative source for internal execution details.
+
+**Key tables:**
+
+```sql
+-- Top queries by total execution time
+SELECT digest_text, count_star, avg_timer_wait/1e12 AS avg_sec
+FROM performance_schema.events_statements_summary_by_digest
+ORDER BY sum_timer_wait DESC LIMIT 10;
+
+-- Current lock waits
+SELECT * FROM performance_schema.data_lock_waits;
+
+-- Replication worker parallelism — count non-idle workers
+SELECT worker_id, service_state, last_error_message
+FROM performance_schema.replication_applier_status_by_worker;
+```
+
+### Slow Query Log
+
+The slow query log records any query that exceeds `long_query_time` (default 10 seconds; typically set to 1–2 seconds in production). Enable with:
+
+```sql
+SET GLOBAL slow_query_log = 'ON';
+SET GLOBAL long_query_time = 1;
+SET GLOBAL log_queries_not_using_indexes = 'ON';
+```
+
+`pt-query-digest` aggregates slow query log entries by fingerprint, showing call count, total time, and average time per query pattern — more useful than reading the raw log.
+
+### SHOW ENGINE INNODB STATUS
+
+`SHOW ENGINE INNODB STATUS\G` is the fastest diagnostic for InnoDB internals. Key sections:
+
+- **BUFFER POOL AND MEMORY** — buffer pool hit rate, dirty page count, pending reads/writes
+- **LOG** — current LSN, last checkpoint LSN, amount of redo log not yet checkpointed (large gap → flush pressure)
+- **TRANSACTIONS** — active transactions, history list length (HLL)
+- **LATEST DETECTED DEADLOCK** — the last deadlock's full lock graph
+
+**History list length (HLL)** is a critical metric. It measures how many undo log records InnoDB's purge thread has not yet reclaimed. A rising HLL means a long-running read transaction is pinning old read views, preventing purge. Every read of a row modified by many transactions forces a version-chain traversal proportional to HLL. An HLL in the millions produces measurable read and write slowdown.
+
+### Key Metrics Summary
+
+| Metric | Source | What it tells you |
+|---|---|---|
+| Buffer pool hit rate | `SHOW ENGINE INNODB STATUS` | Fraction of reads served from memory; low rate → undersized buffer pool or working set eviction |
+| History list length | `SHOW ENGINE INNODB STATUS` | Undo log backlog; high → long-running transaction pinning purge |
+| Redo log free space | `SHOW ENGINE INNODB STATUS` (LOG section) | If checkpoint age approaches log capacity, InnoDB throttles writes |
+| Lock waits | `performance_schema.data_lock_waits` | Active row-level lock contention |
+| Replication lag | `SHOW REPLICA STATUS` / GTID sets | Staleness of replicas; prefer GTID-based measurement |
+| Slow queries | Slow query log + `pt-query-digest` | Query patterns exceeding time threshold |
+
+## Adversarial Case Study: Write-Heavy Budget Ledger
+
+This case study synthesizes the concerns above into a concrete scenario. The prompt: *design MySQL to support a write-heavy ad-budget pacing system, then identify what you'd break in production.*
+
+### The Scenario
+
+Real-time ad budget pacing. Every impression debits a campaign budget.
+
+- 120,000 impressions/sec peak; ~4 billion events/day
+- Top 1% of advertisers account for ~30% of volume; largest single advertiser ~5%
+
+| # | Requirement | Strength |
+|---|---|---|
+| R1 | Campaign must not exceed budget by more than 1% | Hard (money) |
+| R2 | Every impression appears in the ledger exactly once | Hard |
+| R3 | "Can I spend?" answered < 5ms p99 | Hard (request path) |
+| R4 | Spend dashboard may lag reality by 60 seconds | **Soft** |
+| R5 | Finance reconciles monthly over 90 days | Soft latency, hard correctness |
+| R6 | Account-level budget enforced across all campaigns | Hard |
+
+### The Core Move: Stop Making MySQL Count Impressions
+
+The entire design pivots on one insight: **you don't scale MySQL to a 120k-write/sec firehose — you find the small transactional core that genuinely needs ACID and shrink MySQL's job to that.**
+
+**Budget leasing** is the mechanism. An ad server leases a slice of budget in one MySQL transaction, then spends against in-memory counters at wire speed:
+
+```text
+$20 lease at $2 CPM = 10,000 impressions
+MySQL write rate: 120k/sec → ~12 writes/sec
+```
+
+This is not an optimization; it is a change of problem class. The serving path (R3) touches no database at all. The cost is that R1 becomes *bounded* rather than exact: worst-case overspend equals unreported spend in leases on crashed servers. Leases carry `expires_at` so crashed-server budgets are reclaimed rather than stranded. Lease size must be proportional to campaign budget, not constant — small campaigns write more frequently, but rates converge.
+
+### Schema Design and the Partition Key Trap
+
+```sql
+CREATE TABLE spend_ledger (
+  event_time    DATETIME(6) NOT NULL,
+  event_id      BINARY(16)  NOT NULL,
+  advertiser_id BIGINT      NOT NULL,
+  campaign_id   BIGINT      NOT NULL,
+  amount_micros BIGINT      NOT NULL,
+  PRIMARY KEY (event_time, event_id),
+  UNIQUE KEY uk_idem (event_id, event_time),
+  KEY idx_campaign (campaign_id, event_time)
+) PARTITION BY RANGE COLUMNS (event_time) ( /* daily partitions */ );
+```
+
+**`event_id` alone cannot be the unique key** because every unique key must contain the partition column (`event_time`). Idempotency holds on the *pair*. This means a retry must replay the **original** `event_time` — the timestamp of when the impression happened, stamped at origin and carried through Kafka. The moment anyone stamps `NOW()` on retry, the `(event_id, event_time)` pair is different, the unique index does not detect the duplicate, and you have a double-bill.
+
+**Partitioning bought retention, not write distribution.** `DROP PARTITION` completes in milliseconds with no undo log pressure; date-range pruning serves R5's reconciliation queries efficiently. But all inserts still land in today's partition — partitions share one instance's I/O. Anyone who describes partitioning as a way to spread write load has confused it with sharding.
+
+### Lock Hold Time Is the Currency
+
+The most important optimization in any contention-heavy scenario is minimizing how long a lock is held:
+
+```sql
+-- Two-statement pattern: lock held across a network round trip (~1ms)
+SELECT remaining FROM campaign_budget WHERE campaign_id = ? FOR UPDATE;
+UPDATE campaign_budget SET remaining = remaining - ? WHERE campaign_id = ?;
+
+-- Single-statement pattern: lock held for tens of microseconds (~20x throughput)
+UPDATE campaign_budget
+  SET remaining = remaining - ?
+  WHERE campaign_id = ? AND remaining >= ?;
+-- Check affected_rows: 0 = insufficient budget (no reason code — see note below)
+```
+
+The saving is not the round trip itself — it is that the round trip happens *while holding the lock*. The single statement evaluates the predicate under the row's exclusive lock, making it an atomic compare-and-swap with no window for concurrent modification.
+
+The trade-off on the failure path: `affected_rows = 0` gives no reason code (insufficient budget vs. missing campaign vs. paused state). A second query is needed, paid only when rejecting. And computing a derived value in the application ("lease `min($200, remaining)`") requires `SET remaining = remaining - LEAST(?, remaining)` — after which you don't know what you leased. This is a genuine MySQL gap: PostgreSQL and MariaDB have `UPDATE ... RETURNING`; MySQL 8.0 does not.
+
+### The RC Rule: Invariants Must Be Lockable Rows or Unique Keys
+
+Switching from REPEATABLE READ to READ COMMITTED eliminates gap-lock deadlocks on the ledger table. But doing so silently breaks any invariant expressed as an aggregate over a range:
+
+```sql
+-- Under READ COMMITTED, no gap locks →
+-- Two concurrent transactions both read SUM = $900 against a $1,000 limit,
+-- both insert $200 → total committed = $1,300. Write skew via phantom.
+SELECT SUM(amount) FROM lease WHERE campaign_id = ? AND state = 'active' FOR UPDATE;
+-- ... decide in application ...
+INSERT INTO lease (...) VALUES (...);
+```
+
+**Under RC, every invariant must reduce to either a lock on a row that already exists, or a unique-index collision.** "No new row appears in this range" cannot be expressed without gap locks.
+
+The budget leasing design is RC-safe precisely because it replaced the range aggregate with a single-row decrement. Knowing *why* it survives the isolation downgrade is the difference between having designed the system and having copied it.
+
+### Five-Line Reduction
+
+**Problem:** 120k writes/sec against a MySQL budget table with a hot row per campaign.
+
+**Constraint:** R3 (< 5ms p99) rules out consensus in the request path; R1/R2 rule out last-write-wins stores.
+
+**Trade:** Replace per-impression writes with budget leasing (~10,000× write reduction). Relax R1 from exact to bounded-error. Accept worst-case overspend proportional to lease size × server count.
+
+**My miss:** The partition key forces `UNIQUE KEY (event_id, event_time)` — idempotency holds on the pair, not `event_id` alone. A retry that stamps `NOW()` bypasses the unique index entirely. This is a modeling constraint that survives code review.
+
+**Rule:** Shrink the ACID core to what genuinely needs atomicity; don't scale the database to the firehose. Tuning `innodb_buffer_pool_size` buys 3× against a 10,000× gap. Restructuring the write pattern buys the gap.
+
+### What Takes You Down in Production
+
+<Accordion title="1. Deadlock from inconsistent lock order">
+Any transaction touching both `campaign_budget` and `account_budget` (R6) deadlocks with another acquiring them in the opposite order. InnoDB rolls back the cheaper transaction; the application retries; retries collide; a retry storm looks like a database outage. Fix: sort all multi-row writes by primary key, mechanically. This is the deadlock that reliably survives code review because the orderings appear unrelated in separate code paths.
+</Accordion>
+
+<Accordion title="2. Connection pool exhaustion — the actual outage shape">
+`innodb_lock_wait_timeout` defaults to 50 seconds. Fifty requests queuing on one locked row each hold a connection for up to 50 seconds. The connection pool drains. Every endpoint — including ones that never touch the contended table — begins failing. MySQL metrics look healthy throughout. Set this to ~2 seconds: a rejected lease is recoverable; a drained pool is an outage.
+</Accordion>
+
+<Accordion title="3. Gap locks on an append-heavy table">
+`FOR UPDATE` over a range takes next-key locks even when the range matches zero rows. These locks block inserts into the gap — deadlocks between statements that share no existing row. This is the pressure that motivates moving to READ COMMITTED; the RC rule above specifies what you owe in return.
+</Accordion>
+
+<Accordion title="4. Double-bill on client timeout">
+A batch commits; the ACK is lost; the client retries. The transaction was atomic — no partial batch — but it *did* commit. The retry is a full duplicate. `uk_idem` is a **correctness** structure, not a performance optimization. Dropping it to speed up inserts introduces a money bug that surfaces only in monthly reconciliation.
+</Accordion>
+
+<Accordion title="5. History list length — slow strangulation">
+A 40-minute analyst query pins a read view. InnoDB's purge thread cannot advance past that view. The undo log grows. Every read of a hot budget row must traverse a longer version chain. Write latency degrades over hours with no triggering event logged and does not recover when the query ends — purge must catch up. This looks like "the database got slow."
+</Accordion>
+
+<Accordion title="6. Buffer pool eviction from one query">
+A scan over a month of history evicts the hot working set from the buffer pool. Insert latency spikes for ~20 minutes while the buffer pool warms back up. One report; no error logged.
+</Accordion>
+
+<Accordion title="7. The ALTER you cannot run">
+Adding a column to a 40 TB hot table: even `ALGORITHM=INPLACE` requires a brief exclusive MDL at the end. On a write-saturated table, that MDL acquisition queues — and every subsequent query including fast reads queues behind it. Total outage on the billing table from adding a column. This is the scenario that gh-ost and pt-online-schema-change exist to prevent.
+</Accordion>
+
+<Note>
+**Unverified claim:** The source notes identify one claim that has not been reproduced on a local cluster and should be treated as plausible but unverified: whether `WRITESET` dependency tracking in MySQL's parallel replication hashes the *striped* counter rows independently in practice, or whether a shared `campaign_id` index entry re-serializes them. The claim in the replica lag analysis — that striping a hot-row counter also improves replication parallelism — follows logically from how write-set hashing works, but confirming it requires a cluster under load. It is marked as such rather than asserted.
+</Note>

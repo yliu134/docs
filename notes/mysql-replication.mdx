@@ -1,0 +1,249 @@
+---
+title: 'MySQL Replication, GTIDs, and High Availability'
+sidebarTitle: 'Replication & HA'
+description: 'Cover MySQL binlog formats, GTID-based failover, semi-synchronous durability, replication lag, and distributed SQL scaling via Vitess, Espresso, and TiDB.'
+---
+
+MySQL replication underpins high availability, read scaling, and disaster recovery. The binary log — the stream of committed transactions on the primary — is the single data source that every replication mechanism builds on. The binlog format and replication mode you choose determine your consistency guarantees, your failover characteristics, and how much your replicas can lag behind the primary before that lag becomes a correctness problem. Understanding these mechanisms end-to-end is one of the clearest signals in a senior backend interview.
+
+## The Replication Pipeline
+
+Every replication topology begins with the same physical pipeline:
+
+```text
+Primary
+  └── transaction commits → binlog (sequence of events)
+        └── binlog dump thread (per replica) → TCP stream
+              └── Replica I/O thread → relay log
+                    └── applier / coordinator → InnoDB
+```
+
+The primary spawns one binlog dump thread per connected replica, streaming relevant events. The replica's I/O thread writes those events to a local relay log; the applier thread (or multiple workers under parallel replication) executes them against InnoDB.
+
+<Note>
+**The receive rate can exceed the apply rate.** When it does, the relay log backlog grows. This relay-log backlog is one form of replication lag — distinct from network lag (events not yet received) and apply lag (events received but not yet executed). Diagnosing which stage is the bottleneck determines whether tuning applies to network, applier workers, or something else entirely.
+</Note>
+
+## Binary Log Formats
+
+<Tabs>
+  <Tab title="Statement-Based (SBR)">
+    The primary logs the original SQL statement. The replica re-executes it.
+
+    **Assumption:** the same starting state plus the same deterministic statements in the same order produces the same result.
+
+    **Risk:** non-deterministic statements diverge silently. `UPDATE ... WHERE balance >= 100 LIMIT 1` with no `ORDER BY` may touch different rows on primary and replica. Functions like `NOW()`, `UUID()`, and `RAND()` produce different values on re-execution. There is no error; the replica simply has different data.
+
+    **Pros:** compact binlog for set-based operations — one statement vs. millions of individual row events.
+
+    **Cons:** silent divergence risk; replica must re-execute SQL; row-level dependencies are invisible, making parallel apply difficult.
+  </Tab>
+  <Tab title="Row-Based (RBR)">
+    The primary logs the actual before/after state of every modified row. The replica applies the changes verbatim.
+
+    ```text
+    T1: account_id=42, balance: 500 → 400
+    T2: account_id=17, balance: 200 → 350
+    ```
+
+    **Pros:** strong determinism — the replica applies exact effects regardless of non-deterministic SQL. Parallel apply and write-set dependency tracking work naturally with row-level change data. The default since MySQL 5.7.7.
+
+    **Cons:** bulk operations (DELETE with no WHERE, mass UPDATE) produce one row event per affected row — binlog can be orders of magnitude larger than the equivalent SQL statement.
+  </Tab>
+  <Tab title="Mixed">
+    MySQL classifies each statement as safe (deterministic) or unsafe and logs safe statements as SQL, unsafe statements as row changes. Requires MySQL to correctly identify unsafe statements — which it sometimes does not.
+
+    **Evolution path:** STATEMENT → MIXED → ROW (default). The driver was **correctness, not performance**. ROW changes the replication contract from "re-execute the intent" to "apply the exact effects." Parallel replication and write-set tracking fit naturally with ROW afterward — they were consequences, not causes.
+  </Tab>
+</Tabs>
+
+## GTIDs: Replication Coordinates
+
+Traditional replication tracks progress as a physical position in the binlog: `binlog.000123 : 456789`. This coordinate is tied to a specific primary's physical file layout. On failover to a new primary, you must manually translate the old position to the equivalent position in the new primary's binlog — a fragile, error-prone operation.
+
+**GTIDs** (globally unique transaction identifiers) assign each transaction a UUID-qualified sequence number:
+
+```text
+server_uuid:sequence_number   →   e.g., a1b2c3d4-...:1042
+```
+
+The replica tracks an executed GTID set:
+
+```text
+gtid_executed = {UUID-A:1-1000, UUID-B:1-500}
+```
+
+With **auto-positioning**, failover becomes position-independent. The replica connects to the new primary and says "here is the set of transactions I have executed." The new primary identifies the gap and streams what the replica is missing. No binlog file and offset translation required.
+
+<CardGroup cols={2}>
+  <Card title="GTID is the bookmark, not the stream" icon="bookmark">
+    GTID does not replace binlog streaming. The binlog is still the data. GTID changes how *progress* is identified — from a physical position to a transaction identity. The binlog dump thread still streams events from the binary log files.
+  </Card>
+  <Card title="GTID enables idempotent apply" icon="rotate">
+    If a transaction's GTID is already in `gtid_executed`, the replica skips it. This makes recovery after a partial failure safe: re-applying an already-committed GTID is a no-op rather than a double-apply. The committed effects and the GTID record must advance together — committing effects without recording the GTID, or vice versa, produces a bug on recovery.
+  </Card>
+</CardGroup>
+
+## Parallel Replication
+
+Historically, the replica applier was single-threaded. One thread applied transactions serially, regardless of whether those transactions were independent of each other. This created a structural throughput ceiling:
+
+```text
+Primary: 100k tx/s → Replica applier (1 thread): 30k tx/s → Replica falls behind
+```
+
+**Parallel replication** uses multiple worker threads coordinated by a central coordinator:
+
+```text
+relay log → coordinator → [worker 1 | worker 2 | worker 3 | ...] → InnoDB
+```
+
+The critical question is which transactions are safe to apply concurrently. Transactions modifying different rows are independent; transactions modifying the same rows must be applied in order.
+
+**Write-set dependency tracking** (controlled by `binlog_transaction_dependency_tracking` on the **primary**) encodes this information in the binlog. A transaction's write set is a hash of the rows it modifies:
+
+```text
+T1 = {account:1, account:5}
+T2 = {account:2}
+T3 = {account:5}
+
+T1 ↔ T2: independent → run concurrently
+T1 ↔ T3: conflict (account:5) → T3 must wait for T1
+```
+
+Setting `binlog_transaction_dependency_tracking = WRITESET` (vs. `COMMIT_ORDER`) often delivers a larger parallelism improvement than adding more worker threads, because it exposes independence that commit-order analysis misses. Note that this setting governs what metadata is written to the binlog on the primary — debugging it on the replica alone will not find the setting.
+
+## Semi-Synchronous Replication
+
+Standard MySQL replication is asynchronous: the primary commits and returns success to the client; replicas receive and apply the transaction later. If the primary fails before a replica has received the committed transaction, that transaction is lost.
+
+**Semi-synchronous replication** requires that at least one replica has received and flushed the transaction's events to its relay log before the primary returns success to the client. This closes the data-loss window.
+
+<Warning>
+**Semi-sync ACK ≠ applied.** The default semi-sync wait point (`AFTER_SYNC`) waits for the replica to receive and flush the event to the relay log — not to apply it to InnoDB. A semi-sync replica can acknowledge a transaction it has not yet applied. This means semi-sync provides **durability** (the transaction survives primary failure), not **read-after-write visibility** (a client read from that replica immediately after the ACK may not see the committed data).
+</Warning>
+
+If no replica acknowledges within the configured timeout, semi-sync falls back to asynchronous — trading the durability guarantee for availability. The performance cost of semi-sync is the added latency of one replica round-trip per commit.
+
+## Replication Lag and Causal Reads
+
+Replication lag is not one thing — it accumulates at multiple points in the pipeline:
+
+```text
+primary commit
+  → primary binlog write
+    → network transfer
+      → replica relay log write (receive lag)
+        → apply execution
+          → replica commit (apply lag)
+```
+
+`Seconds_Behind_Source` from `SHOW REPLICA STATUS` is an estimate derived from event timestamps, not a true staleness measurement. It is misleading for bursty workloads, long transactions, clock skew, and parallel replication, and should not be used for correctness decisions.
+
+**"The replica has low lag" ≠ "this replica has applied the transaction my read depends on."** For read-after-write consistency, you have two reliable options:
+
+1. **Route the read to the primary.** Simple; does not scale reads.
+2. **GTID-based causal wait.** Capture the GTID of the write, then wait until a replica's `gtid_executed` includes that GTID before routing the read there. ProxySQL and application layers can implement this; GTID becomes a transaction-level barrier for causal consistency.
+
+## Topology and ProxySQL
+
+In a fleet with many replicas, routing reads correctly requires knowing which replicas have applied which transactions. Centralizing GTID-state tracking avoids every router independently parsing the full binlog:
+
+```text
+Primary binlog
+      ↓
+Centralized binlog reader
+      ↓ (GTID progress per replica)
+ProxySQL → causal-read check → route to eligible replica
+```
+
+With 40 GB/day of binlog and 24 routing nodes, having each router parse the binlog independently would mean ~24× duplicated network and parsing overhead. Sharing the GTID state through a single reader eliminates that multiplication.
+
+## Distributed SQL: Vitess, Espresso, and TiDB
+
+When a single MySQL instance reaches the limits of its CPU, memory, I/O, or storage envelope, the only path to more capacity is distributing data and traffic across multiple instances. MySQL's native table partitioning splits a table's data but keeps all partitions on one instance, sharing its resources and failure boundary. True sharding requires routing, replication, failover, and rebalancing across independent instances.
+
+Three systems address this — each with a different answer to where the boundary between the local database and the distributed system sits.
+
+<Tabs>
+  <Tab title="Vitess">
+    **Strategy: keep MySQL; distribute it.**
+
+    ```text
+    Application
+        ↓
+    VTGate          ← SQL-aware routing, distributed query layer
+        ↓
+    VTTablet → MySQL (primary + replicas)   ← one per shard
+    ```
+
+    Each Vitess shard is a real MySQL replication group. InnoDB handles local ACID transactions, MVCC, B+ tree indexes, crash recovery, and intra-shard replication. Vitess adds distributed machinery above MySQL without changing MySQL.
+
+    **Vindexes** map application values (e.g., `user_id`) to a keyspace ID and then to a shard. Cross-shard distributed transactions are supported via 2PC but are expensive — the design preference is to **colocate data that participates in one transaction onto the same shard**.
+
+    Online resharding uses VReplication, which tails MySQL binlog streams to copy data and apply changes continuously while traffic is live — allowing routing to switch to the new shard layout without downtime.
+
+    **Why not native MySQL sharding?** MySQL's architecture — pluggable storage engine below a single server layer — was designed for per-instance operation. Routing, topology management, resharding, and cross-shard query execution are distributed-systems problems that MySQL's kernel never addressed. Vitess builds that layer above MySQL rather than attempting to add it to the kernel.
+  </Tab>
+  <Tab title="Espresso (LinkedIn)">
+    **Strategy: build a distributed record store; don't preserve full relational SQL.**
+
+    Espresso is purpose-built as a distributed record/document store. Its access model is oriented around records and partition keys — most operations identify the relevant partition directly. This allows the system to optimize around partition-local access rather than supporting arbitrary distributed relational SQL.
+
+    Logical partitions are distributed and reassigned among storage nodes as a native abstraction. Rather than transparent cross-partition queries, applications structure their data model around partition boundaries.
+
+    The guiding principle: **avoid distributed transactions by making transactions local through data modeling**. Espresso trades generality for a data access model optimized for LinkedIn's workloads.
+  </Tab>
+  <Tab title="TiDB">
+    **Strategy: preserve the MySQL SQL interface; rebuild the internals for distribution.**
+
+    TiDB is not a MySQL fork — it does not run MySQL or InnoDB anywhere in the stack.
+
+    ```text
+    Application
+        ↓ MySQL wire protocol
+    TiDB Server      ← stateless SQL layer (parser, optimizer, executor)
+        ↓
+    TiKV             ← distributed transactional KV (Raft-replicated Regions)
+        ↓
+    PD               ← metadata, placement, global timestamp allocation
+    ```
+
+    TiKV divides its keyspace into **Regions** (key ranges), distributed across TiKV nodes and replicated via Raft. Distributed transactions are a first-class feature — a transaction touching keys in multiple Regions is handled by TiDB's transaction layer using a Percolator-inspired 2PC protocol with globally coordinated timestamps.
+
+    | Layer | MySQL | TiDB |
+    |---|---|---|
+    | Client protocol | MySQL | MySQL-compatible |
+    | Parser/optimizer | MySQL | TiDB implementation |
+    | Transactions | InnoDB | TiDB distributed layer |
+    | Storage | InnoDB | TiKV |
+    | Replication | MySQL replication | Raft |
+
+    **Vitess shares MySQL's implementation; TiDB shares MySQL's API.** The mental model for transactions differs fundamentally: in Vitess, cross-shard transactions are special cases to avoid; in TiDB, a transaction spanning multiple Regions is a normal database operation.
+  </Tab>
+</Tabs>
+
+### The Architectural Spectrum
+
+```text
+MySQL (single node)
+  ↓ distribute existing instances
+Vitess
+  ↓ distribute storage + SQL together
+TiDB
+
+Espresso: branches away from the SQL spectrum
+          purpose-built distributed record store
+```
+
+All three systems arrive at the same practical guidance: **avoid distributed transactions by making operations local**. Whether that's via Vitess vindexes, Espresso partition keys, or TiDB's data locality recommendations — the mechanism differs but the principle is identical.
+
+## Evolution Questions
+
+<Accordion title="Why Vitess instead of native MySQL sharding?">
+MySQL's pluggable-storage-engine architecture gives InnoDB a clean abstraction boundary to implement B+ trees, MVCC, and crash recovery in isolation. But that architecture was designed for single-instance operation. The problems sharding introduces — routing queries to the right shard, rebalancing data across instances, managing cross-shard topology, failing over individual shards — are distributed systems problems with no natural home inside MySQL's server layer.
+
+Adding sharding to the kernel would mean teaching the SQL layer about network topology, partial failures, split-brain scenarios, and cross-node consistency — complexity that belongs in a separate tier. Vitess instead inserts that tier between the application and MySQL, leaving MySQL to do what it does well (local ACID transactions, SQL execution) and solving distribution above it.
+
+A secondary reason: the problems Vitess solves (resharding, cross-shard routing, causal reads, topology management) are well-suited to a service with its own operational lifecycle, rather than being coupled to the MySQL release and upgrade cycle.
+</Accordion>

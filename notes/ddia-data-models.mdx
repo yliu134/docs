@@ -1,0 +1,177 @@
+---
+title: 'Data Models and Query Languages: DDIA Ch 2'
+sidebarTitle: 'Data Models'
+description: 'Relational, document, and graph models each win in different scenarios. Chapter 2 maps the shape of your data to the model that makes queries natural and code simple.'
+---
+
+The data model you choose is one of the most consequential early decisions in system design — not because switching later is impossible, but because it shapes what queries are natural, what trade-offs you accept at the application layer, and what the code that interacts with the database looks like day to day. Chapter 2 of DDIA gives you the vocabulary to compare the three major families — relational, document, and graph — and the criteria for choosing between them. The question this chapter answers is: *which data model fits which shape of data, and what does the query language commit you to?*
+
+## The Three Model Families
+
+<CardGroup cols={3}>
+  <Card title="Relational" icon="table">
+    Data organized as tables of rows. Strong at many-to-many relationships and ad-hoc queries. SQL is declarative — you describe the result, not the procedure.
+  </Card>
+  <Card title="Document" icon="file-code">
+    Data stored as self-contained documents (JSON/XML). Strong locality for reads of one record. Weak at joins and many-to-many relationships.
+  </Card>
+  <Card title="Graph" icon="diagram-project">
+    Data as vertices and edges. Strong at many-to-many relationships with arbitrary depth and traversal patterns. Query languages (Cypher, SPARQL) describe paths, not joins.
+  </Card>
+</CardGroup>
+
+## The Relational Model
+
+The relational model, introduced by Edgar Codd in 1970, organizes data into **tables** (relations) of **rows** (tuples). Tables reference each other via **foreign keys**, and the database enforces referential integrity. Queries combine tables through **joins** — assembling related data from multiple tables into a single result.
+
+The relational model is strongest when your data has **many-to-many relationships**: a user has many orders, an order has many line items, each line item references a product, each product has a category. Representing this as tables with foreign keys is natural. **Normalization** — the practice of storing each piece of information in exactly one place — avoids duplication and makes updates consistent.
+
+<Tip>
+  Normalization trades write simplicity (update once) for read complexity (join to reassemble). When your read patterns always need the assembled data, denormalization or caching may be appropriate — but that's a conscious trade, not a default.
+</Tip>
+
+## The Document Model
+
+Document databases (MongoDB, CouchBase, RethinkDB) store data as tree-structured documents, typically JSON or XML. The key advantage is **locality**: if your application always fetches a document as a whole — a user profile with embedded address, preferences, and recent activity — a document database can return it in a single read without joins.
+
+The document model fits data with a **self-contained, tree-shaped structure**. A résumé is the DDIA example: it has one person, with multiple positions, multiple education entries, multiple skills. The positions don't exist independently — they belong to that person. A document is the right unit.
+
+### Schema-on-Read vs. Schema-on-Write
+
+<Tabs>
+  <Tab title="Schema-on-Write (Relational)">
+    The schema is enforced at write time by the database. If you try to insert a row with a column that doesn't exist, the database rejects it. This is analogous to a statically typed language: the structure is explicit and validated before the data is stored.
+
+    **Implication:** changing the schema requires a migration. Adding a column runs an `ALTER TABLE`. For large tables, this can be a heavyweight operation that locks the table.
+  </Tab>
+  <Tab title="Schema-on-Read (Document)">
+    There is no enforced schema. The database accepts any document. Interpretation of the structure happens in application code when you read the document. This is analogous to a dynamically typed language: structure is implicit and assumed.
+
+    **Implication:** you can write documents in a new format immediately. Old documents with the old format coexist with new ones. Your application code must handle both — which is a form of complexity that has simply moved from the database to the application.
+  </Tab>
+</Tabs>
+
+### The Join Problem
+
+The document model's weakness is the **many-to-many relationship**. Suppose the user's résumé references a region ("Greater Seattle Area") and an industry ("Software Engineering"). If those are stored as strings inside the document, every document that references them is a separate copy — renaming "Software Engineering" to "Software Development" requires updating every document. That's exactly the normalization problem the relational model solves.
+
+You can work around it by storing IDs and doing joins in application code, but now your application is doing the work the database used to do, and doing it less efficiently.
+
+## The Graph Model
+
+Graph databases (Neo4j, Datomic) treat **vertices** (nodes) and **edges** (relationships) as first-class citizens. Both vertices and edges can carry properties. This model is strongest when your data has many-to-many relationships of **arbitrary depth and direction** — social networks, road networks, dependency graphs, knowledge graphs.
+
+The key insight: in a relational database, a many-to-many relationship that spans four levels deep requires four joins. In a graph database, you describe a traversal pattern and let the engine follow edges, however deep they go.
+
+<Accordion title="Cypher vs. SPARQL: two graph query languages">
+  **Cypher** (Neo4j) is a declarative language designed for property graphs. A query to find all people who followed someone who lives in the US looks like:
+
+  ```cypher
+  MATCH (person) -[:FOLLOWS]-> (follower) -[:BORN_IN]-> (location)
+  WHERE location.type = 'US'
+  RETURN person.name
+  ```
+
+  The pattern `(person) -[:FOLLOWS]-> (follower)` describes a path. Cypher finds all subgraphs matching it.
+
+  **SPARQL** is the W3C standard for querying RDF (Resource Description Framework) triple stores. RDF models data as subject–predicate–object triples — a more rigid structure than property graphs, designed for the semantic web and interoperability. SPARQL queries look for matching triples.
+
+  **The practical choice:** Cypher and property graphs (Neo4j, Amazon Neptune) are the default for most application use cases. SPARQL/RDF appear in linked-data and knowledge-graph contexts where interoperability between organizations is a requirement.
+</Accordion>
+
+## Impedance Mismatch
+
+Most application code is written in object-oriented languages, which model the world as objects with attributes and references. Relational databases model the world as tables, rows, and foreign keys. The translation between these two representations is called the **impedance mismatch**.
+
+ORMs (Object-Relational Mappers) like Hibernate, ActiveRecord, and SQLAlchemy reduce the boilerplate of this translation — they generate SQL from object operations and map result sets back to objects. But they hide the impedance mismatch without eliminating it. Complex queries still require raw SQL. N+1 query problems emerge when an ORM issues a separate query for every row in a result set. The mapping between objects and tables is never perfectly transparent.
+
+<Warning>
+  The impedance mismatch is the source of a large class of ORM-related performance bugs. When your ORM generates a query that runs 100x slower than a hand-written equivalent, the cause is usually the translation layer not knowing your access pattern. ORMs are a productivity tool, not a substitute for understanding the underlying SQL.
+</Warning>
+
+Document databases reduce impedance mismatch for tree-shaped data: a JSON document maps naturally to objects in most languages. Graph databases introduce their own form of it when the traversal results must be mapped back to application objects.
+
+## Declarative vs. Imperative Queries
+
+The distinction between declarative and imperative is the deepest idea in this chapter, and it applies beyond databases.
+
+<Tabs>
+  <Tab title="Declarative (SQL)">
+    You describe **what result you want**, not how to compute it. SQL is the canonical example:
+
+    ```sql
+    SELECT name, age
+    FROM users
+    WHERE age > 25
+    ORDER BY age;
+    ```
+
+    The query optimizer decides whether to use an index, what join algorithm to choose, and in what order to evaluate predicates. You don't control the execution plan — the database does. This is both the power and the constraint of declarative queries.
+
+    **Power:** the optimizer can improve plans without changing the query. A new index changes performance without changing code.  
+    **Constraint:** you cannot force a particular execution strategy without hints, and you cannot express procedural logic inline.
+  </Tab>
+  <Tab title="Imperative (Application Code)">
+    You describe **how to compute the result** step by step. Fetching data with a loop in application code is imperative:
+
+    ```python
+    results = []
+    for user in all_users:
+        if user.age > 25:
+            results.append(user)
+    results.sort(key=lambda u: u.age)
+    ```
+
+    You control every step. The database has no visibility into the pattern, so it cannot optimize it. You also cannot parallelize across a cluster without writing the parallelism yourself.
+
+    **Power:** full control over execution, easy to express arbitrary logic.  
+    **Constraint:** harder to parallelize, harder for the runtime to optimize, more code to write and maintain.
+  </Tab>
+</Tabs>
+
+CSS selectors and XPath are declarative for the same reason SQL is: they describe what to select, and the browser or XML processor decides how. This is why declarative approaches are more amenable to parallel execution — the engine can distribute work because it understands the intent, not just the steps.
+
+## MapReduce: Between Declarative and Imperative
+
+MapReduce occupies an interesting middle position. It is a programming model for processing large datasets across many machines, popularized by Google's 2004 paper and implemented in Hadoop. The two user-supplied functions are:
+
+- **map:** applied to each record; emits zero or more key-value pairs
+- **reduce:** called once per distinct key with all the values emitted for that key; produces the aggregated result
+
+MapReduce is neither fully declarative nor fully imperative. The map and reduce functions are arbitrary application code (imperative), but the framework controls how they are distributed, parallelized, and combined (declarative-style). MongoDB's aggregation pipeline is inspired by the same idea — a sequence of operators where the engine decides execution.
+
+<Note>
+  DDIA notes that SQL can be implemented on top of MapReduce (as Hive does), which illustrates that the declarative/imperative distinction is about the interface, not the underlying execution. A declarative query language and a MapReduce execution engine are not mutually exclusive.
+</Note>
+
+## Why Each Model Emerged When It Did
+
+<Accordion title="The history: why relational won the 1970s–2000s">
+  Before the relational model, databases were either hierarchical (IBM IMS, parent–child trees) or network-based (CODASYL, records linked by pointers). Both required the application to navigate a predefined access path. Adding a new query pattern meant restructuring the data.
+
+  The relational model separated the *logical* representation from the *physical* storage and introduced a declarative query language. You could ask new questions without changing how data was stored. The query optimizer handled the access path selection. This was a major advance in independence between application code and storage.
+
+  Relational databases dominated for ~30 years partly because of this genuine advantage, and partly because of network effects: the SQL standard, mature tooling, decades of accumulated operational knowledge, and the fact that the relational model genuinely handles most business data well.
+</Accordion>
+
+<Accordion title="Why document/NoSQL emerged in the 2000s">
+  By the mid-2000s, two pressures converged:
+
+  1. **Scale:** web companies (Amazon, Google, Facebook) were running workloads that exceeded what a single relational database could handle. Horizontal scaling of relational databases required substantial application-layer work (sharding), and the ACID guarantees became liabilities at scale.
+
+  2. **Impedance mismatch at the frontier:** for certain data shapes — user-generated content, nested structures, variable schemas — the relational model's translation overhead was significant and the schema rigidity was a deployment bottleneck.
+
+  "NoSQL" was a loose umbrella for many different approaches: document stores (MongoDB), wide-column stores (Cassandra, HBase), key-value stores (Redis, DynamoDB), graph databases (Neo4j). What they shared was the rejection of the relational model's constraints — not necessarily its structure. Many provided weaker consistency guarantees in exchange for horizontal scalability and schema flexibility.
+</Accordion>
+
+## Model Selection: When Each Wins
+
+| Scenario | Best-fit model | Why |
+|---|---|---|
+| Financial records, inventory, orders | Relational | Many-to-many, normalization prevents duplication, transactions |
+| User profiles, product catalogs, CMS content | Document | Self-contained tree structure, one record fetched at a time |
+| Social graphs, recommendation engines, fraud detection | Graph | Arbitrary-depth traversals, relationship-first queries |
+| Time-series metrics, event logs | Document or wide-column | Append-heavy, schema evolves, rarely joined |
+| Ad-hoc analytics over structured history | Relational (data warehouse) | SQL declarative, optimizer can handle complex aggregations |
+
+The data model question is really asking: *what is the natural unit of work in this application?* If it's a record that belongs to exactly one owner and is always fetched whole, document is natural. If every entity relates to many others and queries traverse those relationships, graph is natural. If data is interconnected in multiple directions and you need transactions, relational is natural.

@@ -1,0 +1,140 @@
+---
+title: 'Cassandra Partitioning, Replication, and Ring Topology'
+sidebarTitle: 'Partitioning'
+description: 'Cassandra ring topology: consistent hashing, vnodes, replication factor, NetworkTopologyStrategy, gossip, Phi accrual detection, and hinted handoff.'
+---
+
+Cassandra distributes data across nodes using consistent hashing on a token ring: each partition key is hashed to a position on the ring, and the node owning that ring segment stores the data. Because nodes own segments rather than being indexed by a simple modulo, adding or removing a node requires moving only a fraction of the data — the minimal necessary redistribution rather than a full reshuffle. This Dynamo-lineage design is the foundation of Cassandra's horizontal scalability and its leaderless, any-node-accepts-any-request architecture.
+
+## Consistent Hashing and the Token Ring
+
+<Steps>
+  <Step title="Hash the partition key to a token">
+    Cassandra's default partitioner, `Murmur3Partitioner`, applies a non-cryptographic hash to the partition key and produces a 64-bit integer token in the range `[-2^63, 2^63)`. Every partition key deterministically maps to exactly one token.
+  </Step>
+  <Step title="Assign token ranges to nodes">
+    The full token space is treated as a ring. Each node owns one or more contiguous token ranges on that ring. A partition is stored on whichever node's range contains its token. The coordinator (any node) can compute this mapping locally without a lookup.
+  </Step>
+  <Step title="Compare to simple modulo hashing">
+    With modulo hashing (`token % N`), adding a node changes N and therefore remaps almost every key. With consistent hashing, adding a node splits one existing range and moves only the keys in the new node's portion — roughly `1/N` of the total data. This makes cluster scaling operationally safe.
+  </Step>
+</Steps>
+
+<Note>
+  Token-aware client drivers (the DataStax drivers, for example) compute the token for each request's partition key and route directly to the owning node, eliminating an extra coordinator hop. This is the standard deployment configuration.
+</Note>
+
+## Virtual Nodes (Vnodes)
+
+In early Cassandra deployments, each physical node owned a single contiguous token range. This caused two problems: when a node joined or left, the entire range moved in one large transfer, and heterogeneous hardware made equal range assignment difficult.
+
+Virtual nodes solve this by subdividing the ring into many small segments and distributing them across physical nodes.
+
+<CardGroup cols={2}>
+  <Card title="How vnodes work" icon="circle-nodes">
+    Each physical node owns `num_tokens` small token ranges distributed around the ring rather than one large range. Cassandra 4.0 reduced the default from 256 to 16 tokens per node after benchmarks showed that 256 caused overhead during repairs.
+  </Card>
+  <Card title="Why vnodes help" icon="scale-balanced">
+    When a new node joins, it claims a share of token ranges from many existing nodes simultaneously, spreading the data transfer load. When a node dies, its ranges are redistributed across many surviving nodes — no single node absorbs the full burden.
+  </Card>
+</CardGroup>
+
+<Accordion title="Vnode trade-offs">
+  Vnodes are not purely beneficial. More token ranges per node means more SSTable segments and more repair work, since repair operates at the token-range level. In very large clusters, the repair overhead of 256 vnodes per node became a measurable operational cost — the reason 4.0 revised the default downward. The right `num_tokens` depends on cluster size and how frequently you add or remove nodes.
+</Accordion>
+
+## Replication Factor and Replica Placement
+
+Writing one copy of the data would make every node failure a data loss event. Cassandra solves this with configurable replication: the replication factor (RF) determines how many nodes store a copy of each partition.
+
+```sql
+CREATE KEYSPACE my_keyspace
+WITH replication = {
+  'class': 'NetworkTopologyStrategy',
+  'us-east-1': 3,
+  'eu-west-1': 3
+};
+```
+
+<Tabs>
+  <Tab title="SimpleStrategy">
+    Places replicas on the next N nodes clockwise around the ring from the partition's primary owner, with no awareness of racks or datacenters. Appropriate only for single-datacenter deployments or local development. In any production multi-rack setup, two replicas can land on the same rack and fail together.
+  </Tab>
+  <Tab title="NetworkTopologyStrategy">
+    The only real production choice. Spreads replicas across racks and datacenters as informed by the snitch. With RF=3 in a three-rack datacenter, each rack receives one replica, so any single rack failure leaves two copies intact. In multi-datacenter deployments, the RF is configured per datacenter independently.
+  </Tab>
+</Tabs>
+
+<Warning>
+  RF is set per keyspace and per datacenter. Changing RF on a live keyspace requires a subsequent `nodetool repair` to actually distribute the new replicas. Simply altering the keyspace definition tells Cassandra the *target* RF; it does not immediately copy data.
+</Warning>
+
+## No Leader: The Coordinator Model
+
+Cassandra has no master node. Any node can serve as coordinator for any request. When a client sends a write or read:
+
+1. The coordinator receives the request.
+2. It hashes the partition key to identify the owning token range and the set of replica nodes.
+3. It forwards the request to the appropriate replicas according to the consistency level.
+4. It waits for the required number of acknowledgements and responds to the client.
+
+The coordinator itself does not own the data it's serving — it is a router and aggregator. This leaderless design means there is no single point of failure and no coordination bottleneck for writes.
+
+## Gossip: Cluster Membership and Failure Detection
+
+With no leader, Cassandra needs a mechanism for every node to discover and track the state of every other node. That mechanism is gossip — an epidemic protocol modeled on how information spreads through a network of peers.
+
+<Steps>
+  <Step title="Gossip rounds">
+    Every second, each node initiates a gossip exchange with one to three other nodes, sharing its own state and the state of any nodes it has recently heard about. State includes node versions, tokens, rack/DC information, and liveness status.
+  </Step>
+  <Step title="Convergence">
+    Because every node gossips with multiple peers each second, new information propagates quickly even without a central coordinator. A new node joining or a node changing state reaches all cluster members within a few gossip rounds.
+  </Step>
+  <Step title="Seed nodes">
+    When a new node bootstraps, it needs at least one known entry point. Seed nodes serve this role — they are configured in `cassandra.yaml` and are the first gossip targets for a joining node. Seed nodes have no special ongoing role once the cluster is running.
+  </Step>
+  <Step title="Phi accrual failure detection">
+    Rather than a binary up/down judgment, Cassandra uses the Phi accrual failure detector. It tracks the inter-arrival times of gossip heartbeats from each peer and computes a suspicion score (φ). When φ exceeds a configured threshold, the node is considered down. This approach adapts to network conditions and reduces false positives under temporary congestion.
+  </Step>
+</Steps>
+
+## Snitches: Teaching Cassandra About Topology
+
+The snitch tells Cassandra how nodes relate to each other physically — which rack and datacenter each belongs to. Replica placement and read routing both depend on this information.
+
+<CardGroup cols={2}>
+  <Card title="SimpleSnitch" icon="minus">
+    Treats all nodes as if they're in the same rack and datacenter. Use only for single-DC local development. Provides no rack awareness and will allow `NetworkTopologyStrategy` to place multiple replicas on the same rack.
+  </Card>
+  <Card title="GossipingPropertyFileSnitch" icon="file-lines">
+    Each node carries a `cassandra-rackdc.properties` file declaring its rack and datacenter. This information is propagated via gossip, so the cluster builds a full topology map without any central configuration. The standard choice for all production deployments.
+  </Card>
+</CardGroup>
+
+<Note>
+  All nodes in a cluster must use the same snitch class. Mixing snitch types causes undefined replica placement behavior. Changing snitch type on a live cluster requires a rolling restart and subsequent repair.
+</Note>
+
+## Hinted Handoff: Writing Through Replica Failures
+
+When a replica node is temporarily down during a write, the coordinator does not immediately fail the request (subject to the consistency level allowing it). Instead, it stores a **hint** — a record of the write that the unavailable node should have received — locally on the coordinator.
+
+When the down node recovers and rejoins the cluster (detected via gossip), the coordinator replays all stored hints to bring the replica back in sync.
+
+<Accordion title="Bounds and limitations of hinted handoff">
+  Hinted handoff is controlled by two settings:
+
+  - `hinted_handoff_enabled` — globally enables or disables the feature.
+  - `max_hint_window` (default: 3 hours) — the maximum duration for which hints are stored. If a replica is down for longer than this window, hints expire and the replica's data diverges silently until the next `nodetool repair`.
+
+  This creates an important operational rule: if a node is down for longer than `max_hint_window`, hints will have been discarded. When that node returns, it will be missing writes that hinted handoff no longer covers. A repair must be triggered manually to reconcile the divergence. If repair is not run and reads route to that replica, stale data will be returned.
+
+  Hinted handoff compensates for brief, transient failures well. It does not substitute for the periodic `nodetool repair` that catches all divergence including the gaps that hinted handoff misses.
+</Accordion>
+
+## Multi-Datacenter as a First-Class Primitive
+
+Unlike systems that bolt multi-datacenter support on top of a single-region design, Cassandra treats multiple datacenters as a native concept. `NetworkTopologyStrategy` lets you independently configure the RF in each datacenter. `LOCAL_QUORUM` consistency allows a write to be confirmed by a quorum within the local datacenter without waiting for cross-DC acknowledgement — avoiding the latency penalty of inter-datacenter round trips on every operation.
+
+The operational implication: Cassandra clusters that span datacenters can tolerate a full datacenter failure while remaining available in the surviving datacenter, as long as each DC has sufficient RF. This is a deliberate design inheritance from the Dynamo paper's emphasis on availability over consistency.

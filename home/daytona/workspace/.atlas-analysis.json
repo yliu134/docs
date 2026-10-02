@@ -1,13 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Engineering Growth",
+  "projectType": "general",
+  "projectName": "Engineering Growth",
+  "projectDescription": "An 8-month structured self-study framework for senior backend engineers targeting depth in distributed systems, databases, caching, messaging, and AI — with a built-in review cadence, weekly artifacts, and interview-readiness checkpoints.",
   "theme": "almond",
-  "colors": {
-    "primary": "#ef7025",
-    "light": "#eec9bc",
-    "dark": "#4fa1ab"
-  },
-  "favicon": "/favicon.svg",
+  "primaryColor": "#ef7025",
+  "lightColor": "#eec9bc",
+  "darkColor": "#4fa1ab",
   "navigation": {
     "tabs": [
       {
@@ -97,10 +95,24 @@
       }
     ]
   },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/yliu134/engineering-growth"
-    }
-  }
+  "keyFeatures": [
+    "8-month sequential syllabus across Databases, Caching, Messaging, Reliability, and AI Systems",
+    "Three parallel tracks: Systems Fundamentals (65%), AI/Agents (25%), Interview Prep (10%)",
+    "Four-technique learning method: deep read, local instance, evolution history, AI adversarial verification",
+    "Weekly artifact requirement with 'transformed, not transcribed' quality bar",
+    "Sunday review cadence with structured reflection prompts and monthly rollups",
+    "Five-line case study reduction: problem · constraint · trade · my miss · rule",
+    "Monthly mentor 1:1 checkpoints at Month 3 and Month 6 milestones",
+    "Curated reading lists per topic: books, canonical papers, engineering blogs, talks"
+  ],
+  "publicApiSurface": [
+    "Weekly review template (reviews/template.md)",
+    "Reminders checklist template (REMINDERS_TEMPLATE.md)",
+    "Five-line case study bar format",
+    "Four learning-method techniques",
+    "Track A monthly syllabus (Databases → Caching → Messaging → Reliability → Deep Choice)",
+    "Track B AI project candidates",
+    "Track C interview prep cadence",
+    "Note structure: Core Ideas → Notes → Connections → Open Questions"
+  ]
 }

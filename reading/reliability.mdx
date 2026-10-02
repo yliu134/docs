@@ -1,0 +1,110 @@
+---
+title: 'Reliability and Observability Reading List'
+sidebarTitle: 'Reliability'
+description: 'Curated Month 5 reading list: Google SRE Book, Observability Engineering, the Dapper tracing paper, and the best observability and chaos engineering blogs.'
+---
+
+Month 5 of the framework is dedicated to reliability and observability. The three pillars — metrics, structured logging, and distributed tracing — and the SLO-based approach to reliability are the core. By the end of this month you should be able to explain why spans exist (and why logs alone can't replace them), what changed with structured logging, why distributed tracing took a decade to standardize after the Dapper paper, and how to design an SLO and poke holes in it. This list covers both free spine books, two practical supplements, one canonical paper, the key blogs, and the OpenTelemetry documentation you need.
+
+---
+
+## Spine Books
+
+<Note>
+  Both spine books are free online. Read the SRE Book first, then use the SRE Workbook as a practical companion for the exercises.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Google SRE Book" icon="book" href="https://sre.google/sre-book/table-of-contents/">
+    **Betsy Beyer, Chris Jones, Jennifer Petoff, Niall Murphy · Google / O'Reilly**
+    **Free at sre.google/books**
+
+    Read **Part II (Principles)** fully — this covers SLOs, error budgets, toil, and the operational philosophy that Google's SRE organization is built on. The rest of the book is excellent reference material; prioritize Part II for Month 5 and return to the other parts as needed. The SLO chapter is the most important single chapter in the book for a senior backend engineer.
+  </Card>
+  <Card title="The SRE Workbook" icon="book" href="https://sre.google/workbook/table-of-contents/">
+    **Betsy Beyer, Niall Murphy, David K. Rensin, Kent Kawahara, Stephen Thorne · Google / O'Reilly**
+    **Free at sre.google/books**
+
+    The practical companion to the SRE Book. Where the SRE Book explains the principles, the Workbook gives you worked exercises, implementation guidance, and case studies. Use it alongside the SRE Book rather than after — when the SRE Book explains a concept, open the Workbook chapter to see how it looks in practice.
+  </Card>
+</CardGroup>
+
+---
+
+## Supplements
+
+<CardGroup cols={2}>
+  <Card title="Observability Engineering" icon="book">
+    **Charity Majors, Liz Fong-Jones, George Miranda · O'Reilly**
+
+    The current standard reference for high-cardinality observability. Majors, Fong-Jones, and Miranda wrote the book that made structured events and high-cardinality dimensions — rather than aggregate metrics — the correct mental model for debugging distributed systems. Read this in the second half of Month 5 after you have the SRE Book's mental model in place.
+  </Card>
+  <Card title="Systems Performance, 2nd Ed." icon="book">
+    **Brendan Gregg · Addison-Wesley**
+
+    Gregg's reference for performance analysis. You don't need to read this cover-to-cover in Month 5 — use it as a reference for the performance profiling and load testing work in this month. The USE method (Utilization, Saturation, Errors) and the chapters on CPU and memory profiling are the most immediately applicable sections.
+  </Card>
+</CardGroup>
+
+---
+
+## Canonical Paper
+
+<Card title="Dapper: A Large-Scale Distributed Systems Tracing Infrastructure" icon="file-lines">
+  **Sigelman et al. · Google · 2010**
+
+  The origin of distributed tracing as it is practiced today. Dapper introduced spans, trace context propagation, and sampling strategies — the three concepts that OpenTelemetry, Jaeger, Zipkin, and every commercial tracing product are built on. The paper is short (14 pages) and unusually readable for a systems paper.
+</Card>
+
+<Tip>
+  Read the Dapper paper **before** you touch any OpenTelemetry implementation. It's short, and it explains *why* spans exist — request-scoped context that can't be reconstructed from logs alone. Once you understand the problem Dapper was solving, every OpenTelemetry API decision will make more sense. This is the best fifteen minutes of reading in Month 5.
+</Tip>
+
+---
+
+## Engineering Blogs
+
+<Tabs>
+  <Tab title="Observability">
+    | Blog | What to read |
+    |------|-------------|
+    | **Charity Majors** (charity.wtf) | Majors is the best writer on observability in production. Her posts on high-cardinality debugging, the honeycomb.io approach to events over metrics, and the limits of traditional monitoring are essential reading. Read at least three posts before starting *Observability Engineering*. |
+    | **Cindy Sridharan** (medium.com/@copyconstruct) | Sridharan's writing on observability and distributed systems is the most rigorous synthesis available in blog form. Her posts on the three pillars, distributed tracing trade-offs, and testing in production are reference-quality. |
+    | **Increment Magazine** (Stripe) | The Reliability and Debugging issues of Increment contain long-form engineering essays that don't exist anywhere else. Read the full Reliability issue and the Debugging issue during Month 5. |
+  </Tab>
+  <Tab title="Chaos & Reliability">
+    | Blog | What to read |
+    |------|-------------|
+    | **Netflix TechBlog — Chaos Engineering Series** | Netflix invented Chaos Monkey and the chaos engineering discipline. The TechBlog series covers the progression from random instance kills to sophisticated failure injection, FIT (Failure Injection Testing), and how chaos engineering integrates with SLO-based reliability. Read the original Chaos Monkey post and at least two follow-up posts. |
+  </Tab>
+</Tabs>
+
+---
+
+## Docs
+
+<Card title="OpenTelemetry Concepts and Specification" icon="file-code" href="https://opentelemetry.io/docs/concepts/">
+  **opentelemetry.io/docs**
+
+  Read the **Concepts** section end-to-end and skim the **Specification** for the signal types you'll instrument (traces, metrics, logs). The Concepts section explains the OTel data model — traces, spans, metrics instruments, and log records — in a way that maps directly to the Dapper paper. Read Dapper first, then come to the OTel docs and you'll recognize every abstraction.
+</Card>
+
+---
+
+## Evolution Questions to Drive Your Reading
+
+<Accordion title="Why did distributed tracing take a decade to standardize after Dapper?">
+  Dapper was published in 2010. OpenTracing, OpenCensus, and then OpenTelemetry followed over the next decade, with OTEL reaching general availability in 2021. Know why multiple standards emerged, what OpenTracing got wrong, what OpenCensus got right, and why merging them into OpenTelemetry was the right outcome. The answer is in the OTEL specification's history section.
+</Accordion>
+
+<Accordion title="Why are logs the least useful pillar — and what changed with structured logging?">
+  Unstructured logs are hard to query, can't be aggregated, and don't carry request-scoped context. Structured logging (key-value pairs with a consistent schema) makes logs queryable and aggregatable, but still doesn't solve the problem of correlating events across services. Know what structured logging fixed, what it didn't fix, and why traces fill the remaining gap.
+</Accordion>
+
+<Accordion title="Why did metrics-first monitoring (Prometheus) succeed alongside APM-first tools?">
+  Prometheus won the self-hosted, infrastructure-metrics space because of its pull model, powerful query language (PromQL), and the Kubernetes integration story. APM tools like New Relic and Datadog serve a different niche — application-level performance management with less operational overhead. Know the trade-offs: Prometheus gives you flexibility and control; APM tools give you fast time-to-value and opinionated workflows.
+</Accordion>
+
+<Accordion title="Why is OTEL replacing OpenTracing and OpenCensus?">
+  OpenTracing defined a vendor-neutral API but had no SDK and no wire protocol. OpenCensus had both but was opinionated about backends. OTEL merges the API from OpenTracing with the SDK and collector from OpenCensus, adds logs as a first-class signal, and provides a vendor-neutral wire protocol (OTLP). Know what each predecessor got wrong and what OTEL's three-layer design (API, SDK, collector) is designed to prevent.
+</Accordion>
