@@ -291,7 +291,11 @@ A 40-minute analyst query pins a read view. InnoDB's purge thread cannot advance
 A scan over a month of history evicts the hot working set from the buffer pool. Insert latency spikes for ~20 minutes while the buffer pool warms back up. One report; no error logged.
 </Accordion>
 
-<Accordion title="7. The ALTER you cannot run">
+<Accordion title="7. Binlog fills the disk at 3am">
+Row-based replication at this write volume produces an enormous binlog. Misconfigure `binlog_expire_logs_seconds`, or have one replica disconnect for a day while the primary retains binlog files for it, and the disk fills. A full disk does not degrade MySQL — it stops MySQL. This failure mode produces no application warning before the write path goes to zero.
+</Accordion>
+
+<Accordion title="8. The ALTER you cannot run">
 Adding a column to a 40 TB hot table: even `ALGORITHM=INPLACE` requires a brief exclusive MDL at the end. On a write-saturated table, that MDL acquisition queues — and every subsequent query including fast reads queues behind it. Total outage on the billing table from adding a column. This is the scenario that gh-ost and pt-online-schema-change exist to prevent.
 </Accordion>
 

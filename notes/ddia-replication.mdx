@@ -1,7 +1,7 @@
 ---
-title: 'Replication: Leaders, Followers, and Leaderless'
+title: 'DDIA Ch 5: Single-Leader and Leaderless Replication'
 sidebarTitle: 'Replication'
-description: 'Single-leader, multi-leader, and leaderless replication each trade consistency, availability, and latency differently. Chapter 5 maps the strategies to their failure modes.'
+description: 'Single-leader, multi-leader, and leaderless replication trade consistency for latency. DDIA Ch 5 maps each strategy to its failure modes and lag anomalies.'
 ---
 
 Replication keeps copies of the same data on multiple machines — for fault tolerance (survive node failures), for latency (serve reads from nearby replicas), and for throughput (spread reads across replicas). Every replication strategy trades off consistency, availability, and latency. Replication would be trivial if data never changed; every hard part of this chapter is a consequence of handling *change*, and the core question is: *how do you keep copies of the same data on multiple machines, and what breaks when they disagree?*

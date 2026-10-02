@@ -1,7 +1,7 @@
 ---
 title: 'Distributed Systems: Clocks, Faults, and Consensus'
 sidebarTitle: 'Distributed Systems'
-description: 'Unreliable networks, clock skew, process pauses, and Byzantine faults make distributed systems fail in ways single machines never do. Chapters 8 and 9 map the failure modes and the guarantees that survive them.'
+description: 'Unreliable networks, clock skew, and process pauses create failures unique to distributed systems. DDIA Ch 8–9 maps the trouble and survivable guarantees.'
 ---
 
 Distributed systems fail in ways that single-machine systems don't. On a single machine, an operation either completes or doesn't — you know which. Across a network, you can send a request and receive no reply, and you cannot tell whether the request was never received, was received and processed but the reply was lost, or the remote node is simply slow. This uncertainty is not an edge case — it is the operating condition. Understanding these failure modes is the prerequisite for reasoning about consistency guarantees and for knowing which ones are achievable at all. Chapters 8 and 9 of DDIA cover the trouble first, then the guarantees that survive it.

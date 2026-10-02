@@ -1,7 +1,7 @@
 ---
-title: 'Data Models and Query Languages: DDIA Ch 2'
+title: 'DDIA Ch 2: Relational, Document, and Graph Data Models'
 sidebarTitle: 'Data Models'
-description: 'Relational, document, and graph models each win in different scenarios. Chapter 2 maps the shape of your data to the model that makes queries natural and code simple.'
+description: 'Relational, document, and graph models each win for a different data shape. DDIA Ch 2 maps model choice to query naturalness and trade-offs.'
 ---
 
 The data model you choose is one of the most consequential early decisions in system design — not because switching later is impossible, but because it shapes what queries are natural, what trade-offs you accept at the application layer, and what the code that interacts with the database looks like day to day. Chapter 2 of DDIA gives you the vocabulary to compare the three major families — relational, document, and graph — and the criteria for choosing between them. The question this chapter answers is: *which data model fits which shape of data, and what does the query language commit you to?*
@@ -64,7 +64,7 @@ Graph databases (Neo4j, Datomic) treat **vertices** (nodes) and **edges** (relat
 The key insight: in a relational database, a many-to-many relationship that spans four levels deep requires four joins. In a graph database, you describe a traversal pattern and let the engine follow edges, however deep they go.
 
 <Accordion title="Cypher vs. SPARQL: two graph query languages">
-  **Cypher** (Neo4j) is a declarative language designed for property graphs. A query to find all people who followed someone who lives in the US looks like:
+  **Cypher** (Neo4j) is a declarative language designed for property graphs. A query to find all people who followed someone born in the US looks like:
 
   ```cypher
   MATCH (person) -[:FOLLOWS]-> (follower) -[:BORN_IN]-> (location)

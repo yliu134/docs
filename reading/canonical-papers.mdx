@@ -1,7 +1,7 @@
 ---
 title: 'Canonical Papers Every Systems Engineer Should Read'
 sidebarTitle: 'Canonical Papers'
-description: 'The must-read academic papers across the full Track A and Track B syllabus — databases, caching, messaging, reliability, and AI systems.'
+description: 'The essential academic papers for systems engineers: databases, caching, messaging, reliability, and AI systems with a recommended reading schedule.'
 ---
 
 The framework prescribes specific papers for adversarial reading across all eight months. Two papers per month is the budget — choose carefully and read each one properly rather than skimming a longer list. Below is the full catalog organized by topic, with the venue, year, and the one-line reason each paper belongs on the list. Use this page to plan your two-per-month selections and to track what you've covered.
@@ -58,7 +58,7 @@ Two adversarial exchanges per paper is the minimum: one before reading the full 
   | Paper | Authors · Venue · Year | Why it's on the list |
   |-------|------------------------|----------------------|
   | **Attention Is All You Need** | Vaswani et al. · NeurIPS 2017 | The transformer paper. Read for the mental model: why attention replaced recurrence, what multi-head attention does, how the encoder-decoder architecture works. You don't need to implement it — you need to understand it well enough that every explanation of how LLMs work lands properly. |
-  | **ReAct: Synergizing Reasoning and Acting in Language Models** | Yao et al. · ICLR 2023 | Formalizes the Reason + Act loop that most agent frameworks implement. Read this before building any agent — it explains the pattern you're implementing and its failure modes. |
+  | **ReAct: Synergizing Reasoning and Acting in Language Models** | Yao et al. · 2022 | Formalizes the Reason + Act loop that most agent frameworks implement. Read this before building any agent — it explains the pattern you're implementing and its failure modes. |
   | **Toolformer: Language Models Can Teach Themselves to Use Tools** | Schick et al. · Meta AI · 2023 | Shows how models can learn to call external APIs by self-supervising on when and how to use tools. Gives you a different perspective on tool use as a learned capability rather than a prompted behavior. |
 </Accordion>
 
@@ -66,7 +66,7 @@ Two adversarial exchanges per paper is the minimum: one before reading the full 
 
 ## Reading Schedule
 
-Two papers per month is the budget. Here is the recommended sequencing across the Track A syllabus.
+Two papers per month is the budget. Here is the recommended sequencing across the systems fundamentals syllabus.
 
 | Month | Primary Track | Recommended Papers |
 |-------|--------------|-------------------|
@@ -76,8 +76,8 @@ Two papers per month is the budget. Here is the recommended sequencing across th
 | 4 | Messaging | Kafka original · Raft (USENIX ATC 2014) |
 | 4 (continued) | Messaging | Paxos Made Simple · The Log (Kreps essay) |
 | 5 | Reliability | Dapper (Google 2010) · F1 (VLDB 2013) if not yet read |
-| Track B (ongoing) | AI Systems | Attention Is All You Need · ReAct · Toolformer (one per month, Months 1–3) |
+| AI Systems (ongoing) | AI Systems | Attention Is All You Need · ReAct · Toolformer (one per month, Months 1–3) |
 
 <Warning>
-  Two papers per month is not a floor — it is the budget. Attempting more while also doing the spine reading, the blog posts, and the weekly artifact will spread you too thin. Curate hard. One paper read adversarially is worth five papers skimmed.
+  Two papers per month is not a floor — it is the budget. Attempting more while also doing the spine reading and blog posts will spread you too thin. Curate hard. One paper read adversarially is worth five papers skimmed.
 </Warning>

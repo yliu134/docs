@@ -1,10 +1,10 @@
 ---
-title: 'DDIA: Reliable, Scalable, Maintainable Systems'
+title: 'DDIA Chapter 1: Reliability, Scalability, Maintainability'
 sidebarTitle: 'DDIA Overview'
-description: 'DDIA is the spine of Track A Months 1–5, covering reliability, scalability, and maintainability — the three properties every data system must trade off.'
+description: 'DDIA Chapter 1 defines reliability, scalability, and maintainability as measurable properties — the vocabulary every systems chapter builds on.'
 ---
 
-*Designing Data-Intensive Applications* by Martin Kleppmann is the spine reading for Track A Months 1–5. Every subsequent topic in the systems track — storage engines, replication, distributed transactions, consensus — builds on the vocabulary and governing trade-offs that Chapter 1 introduces. The chapter reads fast, but it earns its place: the three words in the title are not marketing copy, they are measurable properties, and most engineering debates reduce to a disagreement about which one to prioritize.
+*Designing Data-Intensive Applications* by Martin Kleppmann opens with the three properties that every data system must balance: reliability, scalability, and maintainability. Every subsequent topic in the systems track — storage engines, replication, distributed transactions, consensus — builds on the vocabulary and governing trade-offs that Chapter 1 introduces. The chapter reads fast, but it earns its place: the three words in the title are not marketing copy, they are measurable properties, and most engineering debates reduce to a disagreement about which one to prioritize.
 
 ## The Three Properties
 
@@ -100,18 +100,18 @@ Maintainability is about the people who build and operate the system after you. 
   </Card>
 </CardGroup>
 
-## Depth Bar for Chapter 1
+## Key Terms to Internalize
 
-The depth bar from the roadmap: on any random DDIA page, you can state the term, its role in the overall system, and the rough mechanism. For Chapter 1, that means:
+Chapter 1 introduces vocabulary that every later chapter assumes. Being able to explain these terms precisely — not just name them — is the signal that the chapter has done its work:
 
-<Accordion title="What 'depth bar met' looks like for key terms">
-  **Fault tolerance:** You know it means surviving component failures without becoming a system failure, and that it's achieved through redundancy, timeouts, and graceful degradation — not by making individual components perfect.
+<Accordion title="Core terms and what precision looks like">
+  **Fault tolerance:** Surviving component failures without becoming a system failure. Achieved through redundancy, timeouts, and graceful degradation — not by making individual components perfect.
 
-  **Load parameter:** You know it's a number that describes the shape of your workload (e.g., requests/sec, read/write ratio, fan-out distribution), and that picking the wrong load parameter sends you down the wrong scaling strategy.
+  **Load parameter:** A number that describes the shape of your workload (e.g., requests/sec, read/write ratio, fan-out distribution). Picking the wrong load parameter leads to the wrong scaling strategy.
 
-  **p99 latency:** You know it means 99% of requests complete faster than this value, why it's more useful than mean latency, and why tail latency amplifies in fan-out architectures.
+  **p99 latency:** 99% of requests complete faster than this value. More useful than mean latency because it captures the tail experience, and tail latency amplifies in fan-out architectures.
 
-  **Accidental complexity:** You know Kleppmann borrows this from Fred Brooks — complexity that the system carries because of implementation choices, not because the problem itself demands it.
+  **Accidental complexity:** Kleppmann borrows this from Fred Brooks — complexity that the system carries because of implementation choices, not because the problem itself demands it.
 </Accordion>
 
 ## Connections to Later Chapters
@@ -126,4 +126,4 @@ Chapter 1's vocabulary echoes through the rest of DDIA. When you reach later cha
 | Maintainability / evolvability | Ch 4 — encoding and schema evolution |
 | Scalability trade-offs | Ch 6 — partitioning strategies |
 
-The index note's framing is worth keeping: *the chapters are the spine, not the content*. Chapter 1 supplies the measuring instruments. Every chapter that follows is a case study in what you discover when you apply them.
+The framing from Kleppmann's introduction is worth keeping: *the chapters are the spine, not the content*. Chapter 1 supplies the measuring instruments. Every chapter that follows is a case study in what you discover when you apply them.

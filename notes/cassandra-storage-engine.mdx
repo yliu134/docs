@@ -1,7 +1,7 @@
 ---
 title: 'Cassandra LSM-Tree Storage Engine and Failure Modes'
 sidebarTitle: 'Storage Engine'
-description: 'Cassandra LSM internals, SSTable compaction strategies, tombstone hazards, B-tree vs LSM tradeoffs, and why DynamoDB chose Paxos over leaderless quorums.'
+description: 'Cassandra LSM internals, SSTable compaction strategies, tombstone hazards, B-tree vs LSM trade-offs, and why DynamoDB chose Paxos over leaderless quorums.'
 ---
 
 Cassandra uses an LSM-tree (Log-Structured Merge-tree) storage engine, making it fundamentally write-optimized — the inverse of InnoDB's B-tree design. Every architectural decision downstream of that choice, from how deletes work to why compaction is mandatory, flows from the LSM commitment. Understanding the LSM-versus-B-tree trade-off tells you which workload each engine was built to serve, and why choosing the wrong engine for your workload produces failures that are difficult to recover from without a data migration.
@@ -137,7 +137,7 @@ The compaction strategy you choose is one of the most consequential per-table co
 
   Why abandon the leaderless design? Three reasons from the paper's rationale stand out. First, eventual consistency with reconciliation pushed real complexity onto every application developer — the shopping-cart merge was a clever example, but most teams couldn't implement merge logic correctly under all failure scenarios. Second, predictable p99 latency mattered more to customers than theoretical availability under rare multi-node failures; Paxos leaders with adaptive capacity provided more predictable tail latency than sloppy quorums. Third, as a fully managed service, Amazon absorbed the operational burden (repair, compaction, topology management) and chose the architecture they could operate reliably at scale, not the one that was easiest to describe in a paper.
 
-  The result: DynamoDB is safer to use by default (strongly consistent by default since 2021), less operationally demanding for users, but it reintroduces a coordination point that the original Dynamo deliberately removed. Global Tables — DynamoDB's multi-region active-active feature — does land back on LWW for cross-region conflict resolution, the one place where Cassandra's simpler design proved necessary at truly global scale.
+  The result: DynamoDB is safer to use by default — strongly consistent reads are available as a first-class opt-in primitive rather than a quorum calculation the application must reason about — less operationally demanding for users, but it reintroduces a coordination point that the original Dynamo deliberately removed. Global Tables — DynamoDB's multi-region active-active feature — does land back on LWW for cross-region conflict resolution, the one place where Cassandra's simpler design proved necessary at truly global scale.
 </Accordion>
 
 ## Cassandra vs DynamoDB: Where They Actually Differ

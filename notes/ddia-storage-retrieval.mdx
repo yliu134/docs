@@ -1,7 +1,7 @@
 ---
-title: 'Storage and Retrieval Internals: DDIA Ch 3'
+title: 'DDIA Ch 3: Storage Engines, LSM-Trees, and B-Trees'
 sidebarTitle: 'Storage & Retrieval'
-description: 'Hash indexes, SSTables, LSM trees, and B-trees each make a different trade. Chapter 3 shows why write-optimized and read-optimized engines exist and how to choose between them.'
+description: 'Hash indexes, SSTables, LSM-trees, and B-trees trade read and write speed differently. Ch 3 explains how to match the storage engine to your workload.'
 ---
 
 A storage engine is a negotiated settlement between reads and writes. Every structure in Chapter 3 of DDIA buys speed on one side by spending it on the other — there is no structure that is simply better. Understanding which engine makes which bet tells you which database to pick for your workload, and why. The chapter's governing question is: *how does a database physically store what you give it, and how does it find it again?*
